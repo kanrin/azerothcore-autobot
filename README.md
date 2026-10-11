@@ -12,15 +12,24 @@ Go 编写的**客户端侧（协议级）WoW 3.3.5a 自动玩家**。它不改�
 
 ## 状态
 
-**里程碑 1 的代码已完成；实盘验证卡在服务端的两个开关上（见「环境要求」第 2、3 条）。**
+**里程碑 1 的代码已完成；实盘验证卡在服务端的一个开关上（见「环境要求」第 2 条）。**
+
+范围已按用户要求扩大（多 bot 编排、常驻 loop、任务/打怪/采集/组队副本/成就/AH/战场、阵营平衡）。
+当前落地顺序与范围收敛见本文末尾的「路线图」；首批只做 **2–3 个 bot 的 loop / 任务 / 采集**，
+AH 经济、战场、成就按配置默认关闭，设计保留。
 
 | # | 里程碑 | 状态 |
 |---|--------|------|
-| 1 | 自动登录 + 建号 | ✅ 代码齐了：`internal/config`（profile + 环境变量 + flag 优先级）、`internal/wowdata`（幂等 provisioning + 清理）、`cmd/autobot`（`probe` / `login`）。实盘已跑到 auth 成功、拿到正确世界地址；**未完成**的是世界握手（被服务端 `AUTH_REJECT` 拒绝，原因已定位为 `Warden.Enabled`） |
+| 1 | 自动登录 + 建号 | ✅ 代码齐了：`internal/config`（profile + 环境变量 + flag 优先级）、`internal/wowdata`（幂等 provisioning + 清理）、`cmd/autobot`（`probe` / `login` / `state`）。实盘已跑到 auth 成功、拿到正确世界地址；**未完成**的是世界握手（被服务端 `AUTH_REJECT` 拒绝，原因已定位为 `Warden.Enabled`） |
+| 1.5 | 自身状态模型 | ✅ `internal/wow/state`：从对象缓存读金钱/背包/装备/银行/技能，字段偏移逐个钉到 `UpdateFields.h` 与 `Player.h` 的行号；`autobot state` 是它的实盘证据（待世界握手打通后跑） |
+| 1.6 | 目标调度器（agent） | ✅ `internal/agent`：200ms tick、黑板、行为注册表、优先级 + 抢占余量、失败指数退避、`Done`/`Stopper` 语义 |
+| 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（跨大陆飞行点未做） |
 | 2 | 任务进行 | 仅发送侧：`CMSG_QUEST_*` 与 gossip 编码 + `Session` 封装；**缺** SMSG 解析、任务日志、状态机 |
 | 3 | 组队接受 | 未开始（上游已有邀请/接受/转队长/解散接口，按规则复用而非重写） |
-| 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机 |
+| 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机。2–3 个 bot 凑不齐 5 人随机本，进本走"手工组队 + 走到副本门口"的回退路径并在日志标注 |
 | 5 | 副本内推进 | 未开始 |
+| 6 | 采集 / 卖垃圾 / 训练师 | 未开始（协议位置已定位：`CMSG_GAMEOBJ_USE`、剥皮法术、`CMSG_TRAINER_*`、`CMSG_LIST_INVENTORY`/`SELL_ITEM`） |
+| 7 | AH 经济 / 战场 / 成就 | 延后（服务端侧证据：`acore_characters.auctionhouse` 0 行、无 AH-bot 模块、`StartPlayerMoney=0`；WSG 需 5v5 即 10 个 bot；`achievement_dbc` 仅 3 行、依赖 `data_dir/dbc`） |
 
 ### 现在能跑什么
 
@@ -32,6 +41,7 @@ go test ./...                                     # 离线单测（实盘用例�
 go run ./cmd/autobot version
 go run ./cmd/autobot probe --account autobotprobe                        # 认证 + 世界连接，报告停在哪一步
 go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe
+go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe   # 打印金钱/背包/技能（--json 可选）
 go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 10m                 # 实盘：登录冒烟 + 清理
 ```
 
@@ -44,6 +54,9 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 10m                 # 实�
 |----|--------|------|
 | `internal/config` | 99.0% | 优先级、严格 YAML、秘密解析、校验 |
 | `internal/wow/packet` | 94.7% | 字节级编解码，接近穷尽 |
+| `internal/agent` | 90.5% | tick 选择、抢占余量、退避、`Done`/`Stopper`、黑板（`-race`） |
+| `internal/wow/state` | 86.8% | 更新字段读背包/技能/金钱；偏移按 AC 源码钉死 |
+| `internal/feature/travel` | 84.1% | 寻路状态机（到达/换图/重规划/卡住），planner 与 mover 都是接口 |
 | `internal/wow` | 44.3% | 未覆盖的基本都是必须真连服务端的分支（`Dial`/`Authenticate`/`EnterWorld`/quest/LFG 发送 helper），由 `-tags=e2e` 用例覆盖 |
 | `internal/wowdata` | 23.7% | 离线只够覆盖前缀守卫与结果投影；SQL 路径靠实盘用例 |
 
@@ -84,14 +97,17 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 10m                 # 实�
 ## 代码结构
 
 ```
-cmd/autobot/             ✅  CLI：version / probe / login（quest / dungeon / party 待补）
+cmd/autobot/             ✅  CLI：version / probe / login / state（run / fleet / cleanup 待补）
 internal/
-  agent/                 (空)  目标调度器（tick 循环 + 黑板 + 行为注册表）
+  agent/                 ✅  目标调度器：200ms tick + 黑板 + 行为注册表 + 抢占余量 + 失败退避
+  feature/
+    travel/              ✅  走路式寻路（navmesh 规划 + 运动引擎每 tick 推进）；quest/grind/gather/... 待补
   config/                ✅  profile(YAML) + 环境变量 + flag 优先级；密码与 DSN 只从环境变量取
   telemetry/             (空)  结构化事件（JSONL）、运行摘要
   wowdata/               ✅  三个库的读写层：幂等 provisioning + 清理 + 只读校验（带 bot 前缀守卫）
   wow/                   ✅  协议层：会话、等待器、opcode、服务端返回码、删角色 / 登出
     packet/              ✅  字节级编解码（quest/gossip/lfg + Reader/Writer）
+    state/               ✅  自身状态模型：金钱 / 背包 / 装备 / 银行 / 技能（读对象缓存的更新字段）
 test/e2e/                ✅  实盘用例（`//go:build e2e`）：TestSmokeLogin、TestCleanupRemovesBotData
 profiles/                ✅  profile 模板（`*.local.yml` 不入库）
 ```
@@ -228,13 +244,24 @@ require (
 - 不写规避反作弊/反检测的代码；只在用户自有或本地服务器上运行，且只操作 bot 命名空间下的账号与角色。
 - 不用 `time.Sleep` 代替等待条件；不用 GM 命令充当正常功能路径（仅限 setup/调试）。
 
-## 下一步
+## 路线图
 
-1. **服务端把 `Warden.Enabled` 改成 0 并重启**，然后跑完里程碑 1 的实盘验收（命令见「现在能跑什么」）：
-   期望 `probe` 打印 `probe: OK phase=authed`、`login` 打印 `login: OK` 且中间有 `login: database agrees`、
-   `TestSmokeLogin` 的第二次登录复用同一 guid、`TestCleanupRemovesBotData` 把角色与账号都清干净。
-2. 里程碑 2：任务子系统的 SMSG 解析（`SMSG_QUESTGIVER_*`、`SMSG_QUESTUPDATE_*`、`SMSG_GOSSIP_*`）+ 任务日志
-   + 状态机；先在 `test/e2e/` 证明"发出去 → 收回来"，再谈决策。
-3. `internal/telemetry`（JSONL 事件）与 `internal/agent`（tick + 黑板）在里程碑 3/4 之前落地，否则功能会各自为政。
-4. `autobot cleanup` 子命令：把 `TestCleanupRemovesBotData` 里的两步（协议删角色 + wowdata 删账号）收进 CLI，
-   方便手工收尾。
+范围收敛：先做 **2–3 个 bot 的 loop / 任务 / 采集**；AH 经济、战场、成就延后（配置默认关闭，设计保留）。
+
+| 阶段 | 内容 | 验收 |
+|------|------|------|
+| **M0 前置（需要你操作）** | ① 服务端 `Warden.Enabled = 0` 并重启 worldserver；② 把客户端数据弄到本机：`dbc/`（小）+ `maps/`、`mmaps/`、`vmaps/`（约 3–6 GB），例如 `docker cp ac-worldserver:/azerothcore/env/dist/data/. ./ac-data/` | `probe` 打印 `phase=authed`；`login` 打印 `login: OK` + `login: database agrees`；`state` 打印的金钱/背包/技能与 `acore_characters`（`characters.money`、`item_instance`、`character_skills`）一致 |
+| **M1 loop 骨架** | 剩余：`cmd/autobot run`（配置 → 登录 → agent 循环）、feature 与 config 的接线 | 单 bot 常驻：日志出现 `agent: running` 与行为切换；Ctrl-C 后 `agent: stopped` 且已登出 |
+| **M2 多 bot** | `internal/fleet`（roster 载入、登录节流、阵营平衡、批量 provisioning）、`fleet.yml` + `roster/*.yml`、`autobot fleet/provision/retire/gc/status` | 3 个 bot 同时常驻；重跑幂等（账号/角色数不变）；`status --faction` 偏差在容差内；`gc` 后 DB 归零 |
+| **M3 战斗 + 任务** | 职业战斗循环（目标选择/回血/复位）、任务子系统（gossip + `SMSG_QUESTGIVER_*`/`SMSG_QUESTUPDATE_*` 解析 + 任务日志状态机）、精选任务路径（如人类 1–20） | kill/collect/explore 三型任务各走完一条，`character_queststatus` 与预期一致 |
+| **M4 采集 + 训练师 + 贩卖** | `CMSG_GAMEOBJ_USE`（矿/草）、剥皮法术（`SpellEffects.cpp:5138` 路径）、`CMSG_TRAINER_LIST`/`BUY_SPELL`、`CMSG_LIST_INVENTORY`/`SELL_ITEM`/`REPAIR_ITEM` | 学一门采集专业 → 采 5 个节点 → 回城卖垃圾：`Money()` 增加、`item_instance` 减行 |
+| **M5 LFG + 副本（受限）** | LFG 协议到 `proposal` 一级；进本走回退路径（手工组队 + 走到副本门口）；副本内推进 | 队长 `CMSG_LFG_JOIN` 后有 `JOIN_RESULT`/`QUEUE_STATUS`/`PROPOSAL_UPDATE` 证据包；回退路径：3 bot 进 Deadmines 并清掉前两组怪（日志标注走了回退） |
+| **backlog** | AH 出售/购买 + 邮件（2.7/2.8/2.9）、战场 + 简单 PvP（2.10，需 10 bot）、成就（2.4，依赖 `data_dir/dbc`）、飞行点（跨大陆）、`internal/telemetry` | 各自在满足前置后按同一 DoD 验收 |
+
+### 需要你决定/操作的三件事
+
+1. **服务端 `Warden.Enabled = 0` 并重启**（命令见「环境要求」第 2 条）。在此之前所有实盘功能都只能停在 auth 成功。
+2. **客户端数据落到本机**（`data_dir`）。本机实测 `env/dist` 下只有 `etc/`、`logs/`，全盘没有 `mmaps` 目录；
+   没有它，寻路/打怪/采集/副本全部无法验证。
+3. 可选：授权我用 SSH（服务端 22 端口开着）做**只读**检查（`data_dir/dbc` 是否完整、conf、日志）——
+   一条 `ls /azerothcore/env/dist/data/dbc | wc -l` 就能判定成就/AH/邮件是否可用。
