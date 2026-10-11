@@ -1,0 +1,6 @@
+github.com/azerothcore/AzerothGhost v1.0.9 h1:rWIAnbSLPnM/dW+qQGHEHf0kYnGPeENpt+j0Qpp6L5U=
+github.com/azerothcore/AzerothGhost v1.0.9/go.mod h1:n5VudLK9mOqc+fIY9dlOf4njrwSMICR9hKr4SsUia6A=
+github.com/go-sql-driver/mysql v1.10.0 h1:Q+1LV8DkHJvSYAdR83XzuhDaTykuDx0l6fkXxoWCWfw=
+github.com/go-sql-driver/mysql v1.10.0/go.mod h1:M+cqaI7+xxXGG9swrdeUIoPG3Y3KCkF0pZej+SK+nWk=
+gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
