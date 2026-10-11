@@ -173,6 +173,7 @@ func Dial(ctx context.Context, opt ConnectOptions) (*Session, error) {
 	// NewSession installs the character-select callbacks, so it must run before
 	// the read loop starts.
 	sess := NewSession(w)
+	sess.realmAddr = auth.Realm.Address
 
 	// AzerothGhost owns the read loop; we only ever write through Session.
 	go func() { _ = w.Run() }()

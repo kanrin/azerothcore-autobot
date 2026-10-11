@@ -91,6 +91,11 @@ func TestOpcodeValues(t *testing.T) {
 		{"SMSG_LFG_PLAYER_INFO", SmsgLfgPlayerInfo, 0x36F},
 		{"SMSG_LFG_PARTY_INFO", SmsgLfgPartyInfo, 0x372},
 		{"SMSG_LFG_DISABLED", SmsgLfgDisabled, 0x398},
+
+		// Character management: the delete path added so provisioning has a
+		// cleanup. Both values are AC Opcodes.h:86 and 90.
+		{"CMSG_CHAR_DELETE", CmsgCharDelete, 0x038},
+		{"SMSG_CHAR_DELETE", SmsgCharDelete, 0x03C},
 	}
 
 	for _, tc := range tests {

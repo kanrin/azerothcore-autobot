@@ -158,3 +158,38 @@ func (c CharCreateResult) String() string {
 	}
 	return fmt.Sprintf("CHAR_CREATE_UNKNOWN(0x%02X)", uint8(c))
 }
+
+// CharDeleteResult is the byte SMSG_CHAR_DELETE carries back: the server's
+// verdict on a CMSG_CHAR_DELETE.
+//
+// Source: azerothcore-wotlk/src/server/shared/SharedDefines.h:3650-3654. Only
+// Success means the character row is gone; the others name the gate that stopped
+// the delete, and repeating the request does not clear them.
+type CharDeleteResult uint8
+
+// Character deletion outcomes.
+const (
+	CharDeleteSuccess                 CharDeleteResult = 0x47
+	CharDeleteFailed                  CharDeleteResult = 0x48
+	CharDeleteFailedLockedForTransfer CharDeleteResult = 0x49
+	CharDeleteFailedGuildLeader       CharDeleteResult = 0x4A
+	CharDeleteFailedArenaCaptain      CharDeleteResult = 0x4B
+)
+
+// charDeleteResultNames maps wire code to AzerothCore enum name, the same way
+// charCreateResultNames does.
+var charDeleteResultNames = map[CharDeleteResult]string{
+	CharDeleteSuccess:                 "CHAR_DELETE_SUCCESS",
+	CharDeleteFailed:                  "CHAR_DELETE_FAILED",
+	CharDeleteFailedLockedForTransfer: "CHAR_DELETE_FAILED_LOCKED_FOR_TRANSFER",
+	CharDeleteFailedGuildLeader:       "CHAR_DELETE_FAILED_GUILD_LEADER",
+	CharDeleteFailedArenaCaptain:      "CHAR_DELETE_FAILED_ARENA_CAPTAIN",
+}
+
+// String returns the AzerothCore enum name, for logs.
+func (c CharDeleteResult) String() string {
+	if name, ok := charDeleteResultNames[c]; ok {
+		return name
+	}
+	return fmt.Sprintf("CHAR_DELETE_UNKNOWN(0x%02X)", uint8(c))
+}

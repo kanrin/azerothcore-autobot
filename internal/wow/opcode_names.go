@@ -58,6 +58,9 @@ var opcodeNames = map[uint16]string{
 	SmsgLfgPlayerInfo:         "SMSG_LFG_PLAYER_INFO",
 	SmsgLfgPartyInfo:          "SMSG_LFG_PARTY_INFO",
 	SmsgLfgDisabled:           "SMSG_LFG_DISABLED",
+
+	CmsgCharDelete: "CMSG_CHAR_DELETE",
+	SmsgCharDelete: "SMSG_CHAR_DELETE",
 }
 
 // OpcodeName returns the AzerothCore name of opcode, or a hex rendering such as

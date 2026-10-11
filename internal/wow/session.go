@@ -68,6 +68,12 @@ type Session struct {
 	// read goroutine.
 	charLists  chan []client.CharEnumEntry
 	charCreate chan CharCreateResult
+
+	// realmAddr is the world address from the authserver's realm list. It is
+	// kept so that a failed login can report the address the server actually
+	// handed out — the usual cause of "connection refused" on a LAN setup is a
+	// realmlist that points at 127.0.0.1.
+	realmAddr string
 }
 
 // NewSession wraps an already-constructed world client.
@@ -93,6 +99,29 @@ func NewSession(w *client.WorldClient) *Session {
 // time. Do not read unexported state through it, and do not use it to send
 // packets from a second goroutine without going through the command lock.
 func (s *Session) Client() *client.WorldClient { return s.client }
+
+// RealmAddress is the world address the authserver returned in its realm list.
+// It is empty until Dial has authenticated.
+func (s *Session) RealmAddress() string { return s.realmAddr }
+
+// Logout asks the server to end the session and waits for SMSG_LOGOUT_COMPLETE.
+//
+// The wait runs outside the command lock: sending is serialised, but blocking
+// the single-writer lock for up to timeout would also block the orderly shutdown
+// that runs after a failed logout. AzerothGhost's WaitForLogout is not
+// cancellable, so the timeout is the only bound.
+func (s *Session) Logout(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	if err := s.doWithLock(s.client.SendLogout); err != nil {
+		return fmt.Errorf("wow: send logout: %w", err)
+	}
+	if err := s.client.WaitForLogout(timeout); err != nil {
+		return fmt.Errorf("wow: logout: %w", err)
+	}
+	return nil
+}
 
 // Close tears the socket down. It is idempotent and must run on every failure
 // path: a socket left open keeps authenticating with the previous session key

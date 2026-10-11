@@ -1,7 +1,9 @@
 package wow
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -363,4 +365,62 @@ func findCharacter(chars []client.CharEnumEntry, name string) (Character, bool) 
 		}
 	}
 	return Character{}, false
+}
+
+// charDeleteTimeout bounds waiting for SMSG_CHAR_DELETE.
+const charDeleteTimeout = 15 * time.Second
+
+// DeleteCharacter deletes one character from the account and waits for the
+// server's verdict. It is the counterpart of the create path above and exists so
+// that provisioning has a real cleanup: an account can only be removed once its
+// characters are gone (wowdata.DeleteAccount enforces that).
+//
+// Wire format, both from AzerothCore:
+//
+//	CMSG_CHAR_DELETE = 0x038 — the payload is the raw little-endian uint64 GUID.
+//	  CharacterHandler.cpp:614-617 reads it with `recvData >> guid`, and
+//	  ObjectGuid.cpp:76-80 implements that as a plain uint64 read, so this packet
+//	  is *not* packed (unlike movement packets).
+//	SMSG_CHAR_DELETE = 0x03C — one uint8 ResponseCodes byte. Only
+//	  CHAR_DELETE_SUCCESS (0x47) means the row is gone; the rest name the gate
+//	  that refused (guild leader, arena captain, transfer lock).
+//
+// Send it from the character-select phase: the server refuses to delete a
+// character that is still logged in, and closing a session does not unregister
+// it instantly.
+//
+// A GUID the server does not know (not in its character cache) makes the handler
+// return silently — no SMSG_CHAR_DELETE at all (CharacterHandler.cpp:652-658,
+// where the account check fails with accountId still 0). That surfaces here as a
+// timeout, never as a false success.
+func (s *Session) DeleteCharacter(ctx context.Context, guid uint64, timeout time.Duration) error {
+	if guid == 0 {
+		return errors.New("wow: delete character: guid is zero")
+	}
+	if timeout <= 0 {
+		timeout = charDeleteTimeout
+	}
+
+	// The client's own DeleteCharacter writes the same bytes; going through Do
+	// here is what buys us the reply, which the upstream client never parses.
+	var payload bytes.Buffer
+	if err := binary.Write(&payload, binary.LittleEndian, guid); err != nil {
+		return fmt.Errorf("wow: delete character %d: encode guid: %w", guid, err)
+	}
+
+	opcode, data, err := s.Do(ctx, CmsgCharDelete, payload.Bytes(), []uint16{SmsgCharDelete}, timeout)
+	if err != nil {
+		return fmt.Errorf("wow: delete character %d: %w", guid, err)
+	}
+	if opcode != SmsgCharDelete {
+		return fmt.Errorf("wow: delete character %d: unexpected reply %s", guid, OpcodeName(opcode))
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("wow: delete character %d: empty %s", guid, OpcodeName(SmsgCharDelete))
+	}
+
+	if result := CharDeleteResult(data[0]); result != CharDeleteSuccess {
+		return fmt.Errorf("wow: delete character %d: server answered %s", guid, result)
+	}
+	return nil
 }

@@ -85,4 +85,14 @@ const (
 	SmsgLfgPlayerInfo         uint16 = 0x36F
 	SmsgLfgPartyInfo          uint16 = 0x372
 	SmsgLfgDisabled           uint16 = 0x398
+
+	// Character management.
+	//
+	// Source: azerothcore-wotlk/src/server/game/Server/Protocol/Opcodes.h:86,90.
+	// CMSG_CHAR_DELETE is a raw little-endian uint64 GUID, not a packed one
+	// (CharacterHandler.cpp:614-617 reads it through ObjectGuid.cpp:76-80, which
+	// is a plain uint64 read). AzerothGhost v1.0.9 declares SmsgCharDelete but
+	// never parses it, so the reply has to be armed through Session.Do.
+	CmsgCharDelete uint16 = 0x038
+	SmsgCharDelete uint16 = 0x03C
 )
