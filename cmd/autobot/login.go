@@ -31,9 +31,8 @@ func runLogin(args []string, logger *slog.Logger) error {
 	if err := requireAccountName(cfg); err != nil {
 		return err
 	}
-	if cfg.Character.Name == "" {
-		return fmt.Errorf("autobot: no character name; set character.name in the profile, " +
-			"AUTOBOT_CHARACTER_NAME in the environment, or pass --char-name")
+	if err := requireCharName(cfg); err != nil {
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), base.timeout)

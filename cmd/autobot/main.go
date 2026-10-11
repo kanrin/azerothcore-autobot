@@ -5,6 +5,7 @@
 //	version  print build information
 //	probe    authenticate, open the world socket and report where it stopped
 //	login    provision the account, log the character in, verify in the database
+//	state    log in and dump money, inventory and skills from the object cache
 //
 // Configuration precedence is flag > environment > profile > defaults; see
 // internal/config for the details. Secrets (account password, database DSNs) are
@@ -40,6 +41,8 @@ func main() {
 		err = runProbe(os.Args[2:], logger)
 	case "login":
 		err = runLogin(os.Args[2:], logger)
+	case "state":
+		err = runState(os.Args[2:], logger)
 	case "", "help", "-h", "--help":
 		usage(os.Stdout)
 		return
@@ -211,6 +214,17 @@ func requireAccountName(cfg *config.Config) error {
 	}
 	return fmt.Errorf("autobot: no account name; set account.username in the profile, " +
 		"AUTOBOT_ACCOUNT in the environment, or pass --account")
+}
+
+// requireCharName fails early for the commands that need a character: a profile
+// without one is valid (probe does not need it), so the check cannot live in
+// Validate.
+func requireCharName(cfg *config.Config) error {
+	if cfg.Character.Name != "" {
+		return nil
+	}
+	return fmt.Errorf("autobot: no character name; set character.name in the profile, " +
+		"AUTOBOT_CHARACTER_NAME in the environment, or pass --char-name")
 }
 
 // argAt returns os.Args[i] or "" when the command line is shorter.

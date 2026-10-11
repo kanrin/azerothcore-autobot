@@ -17,6 +17,7 @@ func usage(w io.Writer) {
   version              打印版本信息
   probe                只做认证 + 世界连接，报告停在哪一步（排查前置问题用）
   login                确保账号存在 → 建/选角色 → 进入世界 → 校验数据库 → 登出
+  state                进入世界后打印自身状态（金钱/背包/技能），用于校验更新字段偏移
 
 通用参数（每个子命令都接受）:
   --profile PATH       profile YAML 路径
