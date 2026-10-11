@@ -1,0 +1,47 @@
+# Example autobot profile.
+#
+# Copy it to ~/.config/autobot/profiles/local-ac.yml (or into profiles/, which is
+# git-ignored for *.local.yml) and edit. Secrets are NOT stored here: a profile
+# only names the environment variables that hold them — see .env.example.
+
+# Authserver address, host:port.
+auth_addr: "127.0.0.1:3724"
+
+# Which entry of the realm list the authserver returns to use.
+realm_index: 0
+
+# Client data holding maps/, mmaps/ and vmaps/. Not needed to log in; needed from
+# the first movement/quest milestone on.
+data_dir: ""
+
+account:
+  # Every account and character this project creates starts with this prefix.
+  # It is what keeps the bot away from real player data: provisioning and cleanup
+  # refuse any name that does not carry it.
+  prefix: "autobot"
+  username: "autobot01"
+  # Name of the environment variable holding the password.
+  password_env: "AUTOBOT_PASSWORD"
+
+character:
+  # Letters only, 2-12 characters, must start with account.prefix.
+  name: "Autobotone"
+  race: 1     # 1 = human
+  class: 1    # 1 = warrior (6 = death knight needs a level 55 character on the account first)
+  gender: 0   # 0 = male
+
+database:
+  # Environment variables holding the DSNs. Not the DSNs themselves.
+  auth_dsn_env: "E2E_AUTH_DSN"
+  char_dsn_env: "E2E_CHAR_DSN"
+  world_dsn_env: "E2E_WORLD_DSN"
+
+# Policy of the later milestones. Parsed from the start so profiles do not have
+# to change when party (milestone 3) and LFG (milestone 4) begin reading it.
+behavior:
+  accept_party_invites: true
+  invite_allow_prefixes: ["autobot"]
+  lfg:
+    enabled: false
+    roles: ["TANK"]
+    dungeons: ["random"]
