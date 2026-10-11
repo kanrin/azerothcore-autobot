@@ -1,3 +1,17 @@
 .cline
 .clinerules
 .vscode
+
+# Local Go workspace when developing against a checkout of AzerothGhost.
+go.work
+go.work.sum
+
+# Profiles with real credentials/DSNs; commit only the placeholder template.
+profiles/*.local.yml
+
+# Secrets.
+.env
+.env.local
+
+# Telemetry and packet traces.
+*.jsonl
