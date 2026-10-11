@@ -8,7 +8,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-require filippo.io/edwards25519 v1.2.0 // indirect
+require (
+	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/o0olele/detour-go v0.0.0-20260624174442-8056537019f8 // indirect
+)
 
 // This redirect is needed as soon as a detour-backed AzerothGhost package
 // (navmesh/movement) is imported: its go.mod points o0olele/detour-go at

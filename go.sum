@@ -4,6 +4,8 @@ github.com/azerothcore/AzerothGhost v1.0.9 h1:rWIAnbSLPnM/dW+qQGHEHf0kYnGPeENpt+
 github.com/azerothcore/AzerothGhost v1.0.9/go.mod h1:n5VudLK9mOqc+fIY9dlOf4njrwSMICR9hKr4SsUia6A=
 github.com/go-sql-driver/mysql v1.10.0 h1:Q+1LV8DkHJvSYAdR83XzuhDaTykuDx0l6fkXxoWCWfw=
 github.com/go-sql-driver/mysql v1.10.0/go.mod h1:M+cqaI7+xxXGG9swrdeUIoPG3Y3KCkF0pZej+SK+nWk=
+github.com/walkline/detour-go v0.0.0-20260624174442-8056537019f8 h1:NoCKTeCeGgnl0oUTOL2f6EQPdnmpywj9DpwTJY0T3g0=
+github.com/walkline/detour-go v0.0.0-20260624174442-8056537019f8/go.mod h1:YGfXAROQikN28jKfghmSU2iZL+KS1moeI71y8WK1lhs=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
