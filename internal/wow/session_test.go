@@ -23,6 +23,53 @@ func newOfflineSession() *Session {
 	}
 }
 
+// TestSessionDoneSignalsRunEnd covers the disconnect signal the bot layer waits
+// on: the read loop ending has to be observable, has to keep the first error, and
+// has to be safe to report twice (Close and the loop both report it).
+func TestSessionDoneSignalsRunEnd(t *testing.T) {
+	s := &Session{}
+
+	select {
+	case <-s.Done():
+		t.Fatal("Done was already closed before the read loop ended")
+	default:
+	}
+
+	boom := errors.New("connection reset")
+	s.markRunDone(boom)
+	s.markRunDone(errors.New("a second, later error")) // idempotent: the first one wins
+
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("Done is not closed after the read loop ended")
+	}
+	if !errors.Is(s.RunErr(), boom) {
+		t.Errorf("RunErr = %v, want %v", s.RunErr(), boom)
+	}
+}
+
+// TestSessionDoneIsNotClosedBeforeTheLoopEnds keeps "has not ended yet" and
+// "ended" distinguishable, which is the whole point of the channel.
+func TestSessionDoneIsNotClosedBeforeTheLoopEnds(t *testing.T) {
+	s := &Session{}
+	if s.Done() == nil {
+		t.Fatal("Done returned a nil channel")
+	}
+	select {
+	case <-s.Done():
+		t.Fatal("Done is closed before anything ended the read loop")
+	default:
+	}
+	// Close on a session without a client still has to unblock a waiter.
+	s.markRunDone(nil)
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("Done is still open after the loop was reported as ended")
+	}
+}
+
 func TestSessionSendWithoutClientFails(t *testing.T) {
 	s := newOfflineSession()
 

@@ -25,7 +25,8 @@ AH 经济、战场、成就按配置默认关闭，设计保留。
 | 1 | 自动登录 + 建号 | ✅ **实盘通过**：`probe` → `phase=authed`；`login` → `in world`（`health=55/55`）+ `database agrees` + `login: OK`；`TestSmokeLogin` 两次登录复用同一 guid；`TestCleanupRemovesBotData` 把角色与账号都清干净（DB 回到 0 行） |
 | 1.5 | 自身状态模型 | ✅ **实盘通过**：`autobot state` 与 DB 逐字段一致；`TestStateMatchesDatabase` 自动比对金钱、每个物品槽（entry/堆叠/耐久）与每个技能（人类战士：22 条技能、含 `backpack[0] ↔ bag0[23]` 的背包映射） |
 | 1.6 | 目标调度器（agent） | ✅ `internal/agent`：200ms tick、黑板、行为注册表、优先级 + 抢占余量、失败指数退避、`Done`/`Stopper` 语义（单测 `-race` 90.5%） |
-| 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（跨大陆飞行点未做；尚未实盘跑动） |
+| 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（单测 84.1%）。**实盘走动被一个 mmap 版本差异挡住**，见下方坑 16 |
+| 1.8 | 常驻 loop（`autobot run`） | ✅ **实盘通过**：`internal/bot` 运行时（登录 → agent 每 200ms tick → 优雅登出）+ `autobot run`；实跑 119 tick 后 SIGINT → `agent: stopped` → `reason=signal` → `Logout complete`（约 19.7s 后 `SMSG_LOGOUT_COMPLETE`，正是 AC 的 20s 倒计时）→ DB `online=0`，无 ghost session；`TestRunResidentLoop` 自动复现同一结论 |
 | 2 | 任务进行 | 仅发送侧：`CMSG_QUEST_*` 与 gossip 编码 + `Session` 封装；**缺** SMSG 解析、任务日志、状态机 |
 | 3 | 组队接受 | 未开始（上游已有邀请/接受/转队长/解散接口，按规则复用而非重写） |
 | 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机。2–3 个 bot 凑不齐 5 人随机本，进本走"手工组队 + 走到副本门口"的回退路径并在日志标注 |
@@ -44,6 +45,12 @@ go run ./cmd/autobot version
 go run ./cmd/autobot probe --account autobotprobe                        # 认证 + 世界连接，报告停在哪一步
 go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe --race 1 --class 1
 go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --class 1   # --json 可选
+
+# 常驻 loop（M1 收尾）：Ctrl-C 优雅退出，日志 agent: running / agent: stopped / bot: logged out
+go run ./cmd/autobot run --account autobotprobe --char-name Autobotprobe --race 1 --class 1
+#   --features ""        不启用任何行为（只在线，用来验证 loop 与保活）
+#   --for 60s            跑满时长后自行优雅退出
+#   --goto 0:-8902.59,-162.61,82.02 --until-arrival   走到该点后退出（需要 mmap，见坑 16）
 
 # 账号 provisioning（只写 bot 命名空间；前缀是硬守卫）
 go run ./cmd/autobot account create --account autobotprobe --prefix autobot   # 密码取自 AUTOBOT_PASSWORD
@@ -131,9 +138,10 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 ## 代码结构
 
 ```
-cmd/autobot/             ✅  CLI：version / probe / login / state / account（run / fleet 待补）
+cmd/autobot/             ✅  CLI：version / probe / login / state / account / run（fleet 待补）
 internal/
-  agent/                 ✅  目标调度器：200ms tick + 黑板 + 行为注册表 + 抢占余量 + 失败退避
+  agent/                 ✅  目标调度器：200ms tick + 黑板 + 行为注册表 + 抢占余量 + 失败退避 + panic 隔离
+  bot/                   ✅  单 bot 运行时：登录 → agent 循环 → 保活（ping 30s/心跳 5s）→ 优雅登出；行为适配层
   feature/
     travel/              ✅  走路式寻路（navmesh 规划 + 运动引擎每 tick 推进）；quest/grind/gather/... 待补
   config/                ✅  profile(YAML) + 环境变量 + flag 优先级；密码与 DSN 只从环境变量取
@@ -284,6 +292,23 @@ require (
 15. **实盘用例的执行顺序是有意义的**：清理用例删的是别人建的角色与账号，所以它的文件名必须是
     `zz_cleanup_test.go`（`go test` 按文件名排序执行），这样 `go test -tags=e2e ./test/e2e/...`
     跑完整套后服务端 DB 回到 0 行。
+16. **mmap 版本：AC master 是 20，AzerothGhost v1.0.9 只认 19** —— 本机 `ac-data/mmaps/*.mmtile`
+    是 v20，所以任何 `FindPath` 都会失败：`version mismatch in '...mmtile': got 20, expected 19`
+    （`pathfinding/mmap_loader.go:17` 硬编码 `mmapVersion = 19`）。证据表明这**只是版本号**：AC 的
+    bump 来自 PR #25720（修 Blade's Edge Arena 寻路的**生成器**改动），`MapDefines.h` 只改了常量一行，
+    `MmapTileRecastConfig` 仍是 `static_assert(sizeof == 36)`，瓦片头 56 字节布局未变；而 v1.0.9 已是
+    上游最新发布版本（`go list -m -versions` 到 v1.0.9 为止）。三条出路（需用户决定）：
+    就地改写 mmtile 头版本号（可逆，4 字节/文件）／向上游提 PR 让期望版本可配置／用 #25720 之前的
+    生成器重建 v19 mmaps。**在解决之前 `run --goto` 与 M3/M5 的移动都不可用**，但登录/常驻/采集以外的
+    只读功能不受影响。
+17. **AC 会因"过快的 ping"踢人**：`WorldSocket.cpp:753-767` 把间隔 **< 27 秒**的 ping 记为
+    `_OverSpeedPings`，超过 `CONFIG_MAX_OVERSPEED_PINGS`（默认 2）就 `kicked for over-speed pings`。
+    所以保活 ping 必须 ≥27s（本项目用 30s），且登录握手后不能立刻再 ping（第一次 ping 用来起算）。
+18. **`WorldClient.Run()` 的返回值必须被接住**：上游 `go w.Run()` 丢弃了它，本项目在 `wow.Session`
+    里补了 `Done()`/`RunErr()`；否则一个长跑的 bot 无法发现连接已断，会对着死 socket 一直 tick。
+19. **一个行为 panic 不能带走整个进程**：`agent.Tick` 现在把行为里的 panic 转成错误并让该行为退避
+    （同时打完整栈），因为 fleet 模式下多个 bot 共用一个进程。实盘第一次跑 `run` 时正是这里索引 `-1`
+    崩掉了进程（见 `agent.go` 的 `callRun` 与 `TestTick_NoCandidateStopsTheRunningBehavior`）。
 
 ## 边界（明确不做）
 
@@ -300,7 +325,7 @@ require (
 | 阶段 | 内容 | 验收 |
 |------|------|------|
 | **M0 前置** | ✅ 已完成：服务端 `Warden.Enabled = 0` + 重启、`realmlist.localAddress = 192.168.50.11`、客户端数据 3.1 GB 拉到本机 `ac-data/`、SSH 只读核查（`data/dbc` 247 个文件齐全） | `probe` → `phase=authed`；`login` → `login: OK` + `login: database agrees`；`state` 与 `acore_characters`（`money`、`item_instance`、`character_skills`）一致 —— **全部达成，见上方状态表** |
-| **M1 loop 骨架** | 剩余：`cmd/autobot run`（配置 → 登录 → agent 循环）、feature 与 config 的接线 | 单 bot 常驻：日志出现 `agent: running` 与行为切换；Ctrl-C 后 `agent: stopped` 且已登出 |
+| **M1 loop 骨架** | ✅ 已完成：`internal/bot`（可复用的单 bot 运行时）+ `autobot run`（常驻、保活、SIGINT/`--for`/`--until-arrival` 优雅退出）、travel 行为适配、`TestRunResidentLoop`。**遗留**：`--goto` 的实盘走动被 mmap 版本差异挡住（坑 16），解决后即可闭环 | 单 bot 常驻：日志出现 `agent: running`；Ctrl-C 后 `agent: stopped` + `bot: logged out` + DB `online=0` —— **已达成** |
 | **M2 多 bot** | `internal/fleet`（roster 载入、登录节流、阵营平衡、批量 provisioning）、`fleet.yml` + `roster/*.yml`、`autobot fleet/provision/retire/gc/status` | 3 个 bot 同时常驻；重跑幂等（账号/角色数不变）；`status --faction` 偏差在容差内；`gc` 后 DB 归零 |
 | **M3 战斗 + 任务** | 职业战斗循环（目标选择/回血/复位）、任务子系统（gossip + `SMSG_QUESTGIVER_*`/`SMSG_QUESTUPDATE_*` 解析 + 任务日志状态机）、精选任务路径（如人类 1–20） | kill/collect/explore 三型任务各走完一条，`character_queststatus` 与预期一致 |
 | **M4 采集 + 训练师 + 贩卖** | `CMSG_GAMEOBJ_USE`（矿/草）、剥皮法术（`SpellEffects.cpp:5138` 路径）、`CMSG_TRAINER_LIST`/`BUY_SPELL`、`CMSG_LIST_INVENTORY`/`SELL_ITEM`/`REPAIR_ITEM` | 学一门采集专业 → 采 5 个节点 → 回城卖垃圾：`Money()` 增加、`item_instance` 减行 |

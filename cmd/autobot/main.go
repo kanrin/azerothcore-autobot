@@ -7,6 +7,7 @@
 //	login    provision the account, log the character in, verify in the database
 //	state    log in and dump money, inventory and skills from the object cache
 //	account  create, list and delete accounts in the bot namespace
+//	run      stay resident: log in, run the agent loop, log out on Ctrl-C
 //
 // Configuration precedence is flag > environment > profile > defaults; see
 // internal/config for the details. Secrets (account password, database DSNs) are
@@ -46,6 +47,8 @@ func main() {
 		err = runState(os.Args[2:], logger)
 	case "account":
 		err = runAccount(os.Args[2:], logger)
+	case "run":
+		err = runRun(os.Args[2:], logger)
 	case "", "help", "-h", "--help":
 		usage(os.Stdout)
 		return

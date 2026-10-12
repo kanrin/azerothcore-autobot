@@ -175,8 +175,9 @@ func Dial(ctx context.Context, opt ConnectOptions) (*Session, error) {
 	sess := NewSession(w)
 	sess.realmAddr = auth.Realm.Address
 
-	// AzerothGhost owns the read loop; we only ever write through Session.
-	go func() { _ = w.Run() }()
+	// AzerothGhost owns the read loop; we only ever write through Session. Its
+	// return value is the disconnect signal the bot layer waits on.
+	go func() { sess.markRunDone(w.Run()) }()
 
 	// WaitForSessionPhase is event-driven and unblocks when the client stops, so
 	// a rejected logon (the client logs "Auth response failed" and closes)

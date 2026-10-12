@@ -83,6 +83,54 @@ type Session struct {
 	// handed out — the usual cause of "connection refused" on a LAN setup is a
 	// realmlist that points at 127.0.0.1.
 	realmAddr string
+
+	// runDone is closed when the client's read loop stops, and runErr is what
+	// it stopped with. A long-running bot has to notice a dropped connection
+	// instead of ticking against a socket that will never answer again.
+	runDone chan struct{}
+	runErr  error
+}
+
+// Done is closed when the client's read loop has stopped: the server dropped the
+// connection, the socket failed, or the client was closed. Select on it to end a
+// long-running loop.
+//
+// A Session that never started a read loop (a hand-built one in a test) reports a
+// channel that is never closed; Close and the loop both mark it done, so a
+// caller that closed the session first does not wait.
+func (s *Session) Done() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runDone == nil {
+		s.runDone = make(chan struct{})
+	}
+	return s.runDone
+}
+
+// RunErr returns the error the read loop ended with, or nil when it ended
+// cleanly (or has not ended yet).
+func (s *Session) RunErr() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runErr
+}
+
+// markRunDone records that the read loop ended. Dial calls it from the goroutine
+// that runs the client; it is idempotent, because the loop can be stopped by
+// Close after it already returned on its own.
+func (s *Session) markRunDone(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runDone == nil {
+		s.runDone = make(chan struct{})
+	}
+	select {
+	case <-s.runDone:
+		return // already recorded
+	default:
+	}
+	s.runErr = err
+	close(s.runDone)
 }
 
 // NewSession wraps an already-constructed world client.
@@ -95,6 +143,7 @@ func NewSession(w *client.WorldClient) *Session {
 		client:     w,
 		charLists:  make(chan []client.CharEnumEntry, 2),
 		charCreate: make(chan CharCreateResult, 1),
+		runDone:    make(chan struct{}),
 	}
 	w.OnCharList = s.deliverCharList
 	w.OnCharCreateResult = s.deliverCharCreate
@@ -199,6 +248,10 @@ func (s *Session) Close() {
 		return
 	}
 	s.client.Close()
+
+	// Closing the socket ends the read loop, but reporting that here too means a
+	// caller that selects on Done() after Close can never be left waiting.
+	s.markRunDone(nil)
 }
 
 // checkClosed reports ErrClosed once Close has run.
