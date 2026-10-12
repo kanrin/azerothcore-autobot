@@ -200,33 +200,50 @@ func (c *Config) applyEnv(lookup envLookup) error {
 // project's AUTOBOT_* name, then upstream's E2E_* name. Every missing variable
 // is reported in one error so a fresh checkout takes one fix, not three runs.
 func (c *Config) ResolveSecrets(lookup envLookup) error {
-	// names collects the candidates for one value, profile-named variable first.
-	names := func(fromProfile string, defaults ...string) []string {
-		out := make([]string, 0, 1+len(defaults))
-		if fromProfile != "" {
-			out = append(out, fromProfile)
-		}
-		return append(out, defaults...)
-	}
+	return errors.Join(c.ResolvePasswordSecret(lookup), c.ResolveDatabaseSecrets(lookup))
+}
 
-	var missing []string
-	resolve := func(candidates []string, dst *string) {
-		if v, ok := lookupFirst(lookup, candidates); ok {
-			*dst = v
-			return
-		}
-		missing = append(missing, candidates...)
-	}
+// ResolvePasswordSecret fills the account password from the environment.
+//
+// It is separate from the DSNs because not every command needs a password:
+// provisioning can take one from --password, and listing or deleting accounts
+// needs none at all. Making "which accounts exist" depend on a secret would be
+// an obstacle with no benefit.
+func (c *Config) ResolvePasswordSecret(lookup envLookup) error {
+	return resolveSecret(lookup, "account password",
+		secretNames(c.Account.PasswordEnv, "AUTOBOT_PASSWORD"), &c.Account.Password)
+}
 
-	resolve(names(c.Account.PasswordEnv, "AUTOBOT_PASSWORD"), &c.Account.Password)
-	resolve(names(c.Database.AuthDSNEnv, "AUTOBOT_AUTH_DSN", "E2E_AUTH_DSN"), &c.Database.AuthDSN)
-	resolve(names(c.Database.CharDSNEnv, "AUTOBOT_CHAR_DSN", "E2E_CHAR_DSN"), &c.Database.CharDSN)
-	resolve(names(c.Database.WorldDSNEnv, "AUTOBOT_WORLD_DSN", "E2E_WORLD_DSN"), &c.Database.WorldDSN)
+// ResolveDatabaseSecrets fills the three database DSNs from the environment.
+func (c *Config) ResolveDatabaseSecrets(lookup envLookup) error {
+	return errors.Join(
+		resolveSecret(lookup, "auth database DSN",
+			secretNames(c.Database.AuthDSNEnv, "AUTOBOT_AUTH_DSN", "E2E_AUTH_DSN"), &c.Database.AuthDSN),
+		resolveSecret(lookup, "characters database DSN",
+			secretNames(c.Database.CharDSNEnv, "AUTOBOT_CHAR_DSN", "E2E_CHAR_DSN"), &c.Database.CharDSN),
+		resolveSecret(lookup, "world database DSN",
+			secretNames(c.Database.WorldDSNEnv, "AUTOBOT_WORLD_DSN", "E2E_WORLD_DSN"), &c.Database.WorldDSN),
+	)
+}
 
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: set %s", ErrMissingSecret, strings.Join(missing, ", "))
+// secretNames collects the candidate variables for one value: the one the
+// profile named first, then the built-in fallbacks.
+func secretNames(fromProfile string, defaults ...string) []string {
+	out := make([]string, 0, 1+len(defaults))
+	if fromProfile != "" {
+		out = append(out, fromProfile)
 	}
-	return nil
+	return append(out, defaults...)
+}
+
+// resolveSecret reads the first candidate that is set, or reports every
+// candidate name so that one run fixes the whole file.
+func resolveSecret(lookup envLookup, what string, candidates []string, dst *string) error {
+	if v, ok := lookupFirst(lookup, candidates); ok {
+		*dst = v
+		return nil
+	}
+	return fmt.Errorf("%w: set %s (the %s)", ErrMissingSecret, strings.Join(candidates, ", "), what)
 }
 
 // lookupFirst returns the first of names that is set to a non-empty value.
@@ -261,6 +278,8 @@ func (c *Config) Validate() error {
 	if c.Account.Prefix == "" {
 		errs = append(errs, fmt.Errorf(
 			"%w: account.prefix is empty; the prefix is what keeps the bot out of real player data", ErrInvalidProfile))
+	} else if err := checkPrefixShape(c.Account.Prefix); err != nil {
+		errs = append(errs, err)
 	}
 	if c.Account.Username != "" {
 		errs = append(errs, c.checkBotName(c.Account.Username))
@@ -286,6 +305,28 @@ func (c *Config) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// checkPrefixShape keeps the bot prefix usable as a namespace guard.
+//
+// The prefix decides which accounts and characters this project may touch, so a
+// one-character or punctuated prefix is refused rather than accepted as a
+// namespace: "z" would claim every account starting with z, and "%" would claim
+// everything, which is exactly the situation the guard exists to prevent.
+func checkPrefixShape(prefix string) error {
+	if len(prefix) < 2 {
+		return fmt.Errorf("%w: account.prefix %q is too short; use at least 2 characters",
+			ErrInvalidProfile, prefix)
+	}
+	for _, r := range prefix {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		default:
+			return fmt.Errorf("%w: account.prefix %q contains %q; use letters and digits only",
+				ErrInvalidProfile, prefix, r)
+		}
+	}
+	return nil
 }
 
 // checkBotName enforces the prefix rule on one name.

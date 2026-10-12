@@ -43,6 +43,29 @@ func TestBotPrefixIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+// TestAccountLikePattern covers the one thing that can turn the prefix guard into
+// its opposite: a wildcard inside the prefix. Without escaping, a prefix of "%"
+// would make the listing return every account on the server, real players
+// included, and the guard would be worse than useless.
+func TestAccountLikePattern(t *testing.T) {
+	tests := []struct {
+		prefix string
+		want   string
+	}{
+		{"autobot", "autobot%"},
+		{"zhl", "zhl%"},
+		{"%", `\%` + "%"},
+		{"au_obot", `au\_obot` + "%"},
+		{`back\slash`, `back\\slash` + "%"},
+		{"a%b", `a\%b` + "%"},
+	}
+	for _, tc := range tests {
+		if got := accountLikePattern(tc.prefix); got != tc.want {
+			t.Errorf("accountLikePattern(%q) = %q, want %q", tc.prefix, got, tc.want)
+		}
+	}
+}
+
 func TestEnsureAccountRejectsEmptyPassword(t *testing.T) {
 	c := &Client{prefix: "autobot"}
 

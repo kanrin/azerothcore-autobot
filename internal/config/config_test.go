@@ -258,6 +258,52 @@ account:
 	})
 }
 
+func TestResolveSecretsCanBeSplit(t *testing.T) {
+	dsnOnly := envOf(map[string]string{
+		"E2E_AUTH_DSN":  "auth-dsn",
+		"E2E_CHAR_DSN":  "char-dsn",
+		"E2E_WORLD_DSN": "world-dsn",
+	})
+
+	// The account commands list and delete accounts, which needs the databases
+	// but no password; a missing secret they do not use must not block them.
+	t.Run("DSNs resolve without a password", func(t *testing.T) {
+		cfg := Default()
+		if err := cfg.ResolveDatabaseSecrets(dsnOnly); err != nil {
+			t.Fatalf("ResolveDatabaseSecrets: %v", err)
+		}
+		if cfg.Database.AuthDSN != "auth-dsn" || cfg.Database.CharDSN != "char-dsn" || cfg.Database.WorldDSN != "world-dsn" {
+			t.Errorf("DSNs = %q / %q / %q, want the three values from the environment",
+				cfg.Database.AuthDSN, cfg.Database.CharDSN, cfg.Database.WorldDSN)
+		}
+		if cfg.Account.Password != "" {
+			t.Errorf("Password = %q, want it untouched by ResolveDatabaseSecrets", cfg.Account.Password)
+		}
+	})
+
+	// Provisioning needs the password, and a DSN typo must not hide that.
+	t.Run("the password resolves without DSNs", func(t *testing.T) {
+		cfg := Default()
+		if err := cfg.ResolvePasswordSecret(envOf(map[string]string{"AUTOBOT_PASSWORD": "pw"})); err != nil {
+			t.Fatalf("ResolvePasswordSecret: %v", err)
+		}
+		if cfg.Account.Password != "pw" {
+			t.Errorf("Password = %q, want %q", cfg.Account.Password, "pw")
+		}
+		if cfg.Database.AuthDSN != "" {
+			t.Errorf("AuthDSN = %q, want it untouched by ResolvePasswordSecret", cfg.Database.AuthDSN)
+		}
+	})
+
+	t.Run("a missing password is still an error", func(t *testing.T) {
+		cfg := Default()
+		err := cfg.ResolvePasswordSecret(dsnOnly)
+		if !errors.Is(err, ErrMissingSecret) {
+			t.Fatalf("ResolvePasswordSecret without a password in the environment = %v, want ErrMissingSecret", err)
+		}
+	})
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -282,6 +328,26 @@ func TestValidate(t *testing.T) {
 			name:    "empty account prefix",
 			mutate:  func(c *Config) { c.Account.Prefix = "" },
 			wantErr: ErrInvalidProfile,
+		},
+		{
+			// A one-letter prefix would claim every account starting with that
+			// letter, so the guard would stop being a guard.
+			name:    "account prefix that is too short",
+			mutate:  func(c *Config) { c.Account.Prefix = "z" },
+			wantErr: ErrInvalidProfile,
+		},
+		{
+			name:    "account prefix containing a wildcard",
+			mutate:  func(c *Config) { c.Account.Prefix = "au%" },
+			wantErr: ErrInvalidProfile,
+		},
+		{
+			name: "custom prefix with a matching account name",
+			mutate: func(c *Config) {
+				c.Account.Prefix = "zhl"
+				c.Account.Username = "zhl001"
+				c.Character = Character{Name: "Zhlone", Race: 1, Class: 1}
+			},
 		},
 		{
 			name:    "negative realm index",

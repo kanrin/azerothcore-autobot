@@ -294,6 +294,76 @@ func (c *Client) DeleteAccount(ctx context.Context, username string) error {
 	return nil
 }
 
+// AccountRow is one account as the auth database stores it, used for listings.
+//
+// It is a separate type from Account, whose Created flag means "this call
+// inserted the row": a listing describes stored state, not one write.
+type AccountRow struct {
+	ID        int
+	Username  string
+	Expansion uint8
+
+	// GMLevel is the highest account_access level, 0 when the account has none.
+	GMLevel int
+
+	// LastLogin is the value as the database stores it, empty when the account
+	// has never been used. It stays a string because the driver only returns a
+	// time.Time when the DSN sets parseTime, and the DSN belongs to the operator.
+	LastLogin string
+
+	Online bool
+}
+
+// ListAccounts returns every account under the bot prefix, oldest first.
+//
+// Filtering by the prefix is part of the same guard as the write checks: this
+// project must never *show* a real player's account either, not merely never
+// write to one. The prefix is matched literally — a % or _ inside it would
+// otherwise turn into a wildcard and widen the listing.
+func (c *Client) ListAccounts(ctx context.Context) ([]AccountRow, error) {
+	rows, err := c.auth.QueryContext(ctx, `
+		SELECT a.id, a.username, a.expansion, COALESCE(MAX(ac.gmlevel), 0), a.last_login, a.online
+		FROM account a
+		LEFT JOIN account_access ac ON ac.id = a.id
+		WHERE LOWER(a.username) LIKE ?
+		GROUP BY a.id, a.username, a.expansion, a.last_login, a.online
+		ORDER BY a.id`, accountLikePattern(c.prefix))
+	if err != nil {
+		return nil, fmt.Errorf("wowdata: list accounts with prefix %q: %w", c.prefix, err)
+	}
+	defer rows.Close()
+
+	var out []AccountRow
+	for rows.Next() {
+		var (
+			row    AccountRow
+			online uint8
+			last   sql.NullString
+		)
+		if err := rows.Scan(&row.ID, &row.Username, &row.Expansion, &row.GMLevel, &last, &online); err != nil {
+			return nil, fmt.Errorf("wowdata: scan an account row: %w", err)
+		}
+		row.LastLogin = last.String
+		row.Online = online != 0
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("wowdata: iterate accounts: %w", err)
+	}
+	return out, nil
+}
+
+// accountLikePattern turns a bot prefix into the LIKE pattern ListAccounts uses.
+//
+// The wildcards are escaped so a prefix containing % or _ is matched literally:
+// without that, a prefix of "%" would list every account on the server, including
+// real players', which is the opposite of what the guard is for. MySQL's LIKE
+// escape character is the backslash, so the backslash itself is escaped first.
+func accountLikePattern(prefix string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(prefix)
+	return escaped + "%"
+}
+
 // Character is one row of acore_characters.characters, narrowed to the columns
 // this project reads.
 type Character struct {
