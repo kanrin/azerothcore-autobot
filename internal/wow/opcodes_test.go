@@ -96,6 +96,13 @@ func TestOpcodeValues(t *testing.T) {
 		// cleanup. Both values are AC Opcodes.h:86 and 90.
 		{"CMSG_CHAR_DELETE", CmsgCharDelete, 0x038},
 		{"SMSG_CHAR_DELETE", SmsgCharDelete, 0x03C},
+
+		// Logout handshake, AC Opcodes.h:105-107. The response and the
+		// completion packet are distinct: arm both, or a refused logout looks
+		// like a timeout.
+		{"CMSG_LOGOUT_REQUEST", CmsgLogoutRequest, 0x04B},
+		{"SMSG_LOGOUT_RESPONSE", SmsgLogoutResponse, 0x04C},
+		{"SMSG_LOGOUT_COMPLETE", SmsgLogoutComplete, 0x04D},
 	}
 
 	for _, tc := range tests {

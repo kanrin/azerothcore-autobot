@@ -95,4 +95,15 @@ const (
 	// never parses it, so the reply has to be armed through Session.Do.
 	CmsgCharDelete uint16 = 0x038
 	SmsgCharDelete uint16 = 0x03C
+
+	// Logout handshake.
+	//
+	// Source: Opcodes.h:105-107. CMSG_LOGOUT_REQUEST has an empty body; the
+	// server always answers SMSG_LOGOUT_RESPONSE (uint32 reason, uint8 instant)
+	// and, unless it refuses the logout, sends SMSG_LOGOUT_COMPLETE later — 20
+	// seconds later when the logout is not instant (WorldSession.h:547). See
+	// Session.Logout, which arms both replies before sending.
+	CmsgLogoutRequest  uint16 = 0x04B
+	SmsgLogoutResponse uint16 = 0x04C
+	SmsgLogoutComplete uint16 = 0x04D
 )

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"azerothcore-autobot/internal/wow"
 	"azerothcore-autobot/internal/wowdata"
@@ -95,7 +94,7 @@ func runLogin(args []string, logger *slog.Logger) error {
 	// A failed logout is a failure, not a warning: the server keeps the session
 	// alive for a while, and the next login of the same account would then be
 	// refused as "already in world".
-	if err := sess.Logout(15 * time.Second); err != nil {
+	if err := sess.Logout(ctx, 0); err != nil {
 		return fmt.Errorf("login: %w", err)
 	}
 

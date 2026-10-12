@@ -74,6 +74,13 @@ func TestEnterWorldOptionsDefaults(t *testing.T) {
 	if got.LoginTimeout != 60*time.Second {
 		t.Errorf("LoginTimeout = %v, want %v", got.LoginTimeout, 60*time.Second)
 	}
+	// ReadyTimeout is separate from LoginTimeout on purpose: SMSG_LOGIN_VERIFY_WORLD
+	// does not carry the character's own update fields, so "in world" and "state
+	// readable" are two different moments (observed live: Health() was 0 right
+	// after the verify packet).
+	if got.ReadyTimeout != 15*time.Second {
+		t.Errorf("ReadyTimeout = %v, want %v", got.ReadyTimeout, 15*time.Second)
+	}
 	if got.Appearance != DefaultAppearance(0) {
 		t.Errorf("Appearance = %+v, want the default for gender 0", got.Appearance)
 	}
@@ -90,11 +97,13 @@ func TestEnterWorldOptionsKeepsExplicitValues(t *testing.T) {
 		CharEnumTimeout:   3 * time.Second,
 		CharCreateTimeout: 4 * time.Second,
 		LoginTimeout:      5 * time.Second,
+		ReadyTimeout:      6 * time.Second,
 		Appearance:        Appearance{Gender: 1, Skin: 2, Face: 3, HairStyle: 4, HairColor: 5, FacialHair: 6, OutfitID: 7},
 	}.withDefaults()
 
 	if got.NameAttempts != 2 || got.CharEnumTimeout != 3*time.Second ||
-		got.CharCreateTimeout != 4*time.Second || got.LoginTimeout != 5*time.Second {
+		got.CharCreateTimeout != 4*time.Second || got.LoginTimeout != 5*time.Second ||
+		got.ReadyTimeout != 6*time.Second {
 		t.Fatalf("explicit timeouts were overwritten: %+v", got)
 	}
 	if got.Appearance.HairColor != 5 || got.Appearance.OutfitID != 7 {

@@ -77,6 +77,16 @@ type EnterWorldOptions struct {
 	// LoginTimeout bounds waiting for SMSG_LOGIN_VERIFY_WORLD.
 	LoginTimeout time.Duration
 
+	// ReadyTimeout bounds waiting for the character's own update fields after
+	// SMSG_LOGIN_VERIFY_WORLD.
+	//
+	// The verify packet arrives first; the character's SMSG_UPDATE_OBJECT — the
+	// one that carries health, the inventory GUIDs and the skill array — comes
+	// after it. Returning before that lands hands the caller a character whose
+	// Health() is 0 and whose state.Snapshot() is empty, which is exactly the
+	// "cache thin right after a teleport" trap.
+	ReadyTimeout time.Duration
+
 	// Logf receives progress lines. Nil discards them.
 	Logf func(format string, args ...interface{})
 }
@@ -93,6 +103,9 @@ func (o EnterWorldOptions) withDefaults() EnterWorldOptions {
 	}
 	if o.LoginTimeout <= 0 {
 		o.LoginTimeout = 60 * time.Second
+	}
+	if o.ReadyTimeout <= 0 {
+		o.ReadyTimeout = 15 * time.Second
 	}
 	if o.Appearance == (Appearance{}) {
 		o.Appearance = DefaultAppearance(0)
@@ -162,6 +175,16 @@ func (s *Session) EnterWorld(ctx context.Context, opt EnterWorldOptions) (Charac
 	// WaitForLogin closes on SMSG_LOGIN_VERIFY_WORLD, which is also the moment
 	// the client transitions to PhaseInWorld.
 	if err := waitUpstream(ctx, "SMSG_LOGIN_VERIFY_WORLD", opt.LoginTimeout, s.client.WaitForLogin); err != nil {
+		return Character{}, err
+	}
+
+	// The character's own update fields arrive in a separate SMSG_UPDATE_OBJECT
+	// after the verify packet, so wait for them before reporting success: every
+	// caller needs health and (from milestone 1.5 on) the inventory, and reading
+	// them too early yields a character that looks dead with empty bags.
+	if err := s.WaitFor(ctx, opt.ReadyTimeout, "character update fields in the object cache", func() bool {
+		return s.client.MaxHealth() > 0
+	}); err != nil {
 		return Character{}, err
 	}
 

@@ -106,7 +106,7 @@ func runState(args []string, logger *slog.Logger) error {
 		"money", snap.Money, "items", len(snap.Items), "skills", len(snap.Skills),
 		"unresolved", len(snap.UnknownEntries()))
 
-	if err := sess.Logout(15 * time.Second); err != nil {
+	if err := sess.Logout(ctx, 0); err != nil {
 		return fmt.Errorf("state: %w", err)
 	}
 	return nil

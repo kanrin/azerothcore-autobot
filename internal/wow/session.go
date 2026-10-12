@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"azerothcore-autobot/internal/wow/packet"
+
 	"github.com/azerothcore/AzerothGhost/client"
 )
 
@@ -26,6 +28,13 @@ var (
 	// exists so that those cases return an error instead of panicking on a nil
 	// dereference deep inside the client.
 	ErrNotConnected = errors.New("wow: not connected")
+
+	// ErrLogoutRefused means the server refused CMSG_LOGOUT_REQUEST and named a
+	// reason in the wrapped message. That is a precondition failure, not an
+	// infrastructure one: the bot is in combat, falling, duelling, or otherwise
+	// not allowed to leave yet. The server sends no completion packet in this
+	// case, so without this error a refused logout would look like a timeout.
+	ErrLogoutRefused = errors.New("wow: logout refused")
 )
 
 // PollInterval is how often condition-based waiters re-check their predicate.
@@ -104,20 +113,74 @@ func (s *Session) Client() *client.WorldClient { return s.client }
 // It is empty until Dial has authenticated.
 func (s *Session) RealmAddress() string { return s.realmAddr }
 
-// Logout asks the server to end the session and waits for SMSG_LOGOUT_COMPLETE.
+// Logout asks the server to end the session and waits for the session to be
+// gone, reporting a refusal instead of a timeout when the server says no.
 //
-// The wait runs outside the command lock: sending is serialised, but blocking
-// the single-writer lock for up to timeout would also block the orderly shutdown
-// that runs after a failed logout. AzerothGhost's WaitForLogout is not
-// cancellable, so the timeout is the only bound.
-func (s *Session) Logout(timeout time.Duration) error {
+// DefaultLogoutTimeout bounds a whole graceful logout.
+//
+// AzerothCore only logs a character out instantly when it is resting, on a taxi,
+// or privileged; otherwise WorldSession.h:547 is
+// `curr_time >= _logout_time + 20`, so SMSG_LOGOUT_COMPLETE arrives about 20
+// seconds after the request. Upstream's own e2e harness waits 30 seconds for
+// exactly this reason. A shorter timeout here turns a normal logout into a
+// spurious failure.
+const DefaultLogoutTimeout = 30 * time.Second
+
+// Logout sends CMSG_LOGOUT_REQUEST and waits for the session to end.
+//
+// Both replies are armed before the request leaves, because the server answers
+// SMSG_LOGOUT_RESPONSE immediately while SMSG_LOGOUT_COMPLETE arrives only after
+// the countdown:
+//
+//   - a non-zero reason in the response means the logout was refused (in combat,
+//     falling, duelling). The server then sends nothing else, so a client that
+//     waits only for completion reports a confusing timeout; this returns
+//     ErrLogoutRefused with the reason right away.
+//   - a zero reason means accepted; the completion packet follows.
+//
+// The command lock is held for the whole sequence, as in Do: the listener has to
+// exist before the trigger packet is written, and a logout is the last thing a
+// caller does with a session.
+func (s *Session) Logout(ctx context.Context, timeout time.Duration) error {
 	if timeout <= 0 {
-		timeout = 15 * time.Second
+		timeout = DefaultLogoutTimeout
 	}
-	if err := s.doWithLock(s.client.SendLogout); err != nil {
-		return fmt.Errorf("wow: send logout: %w", err)
+	deadline := time.Now().Add(timeout)
+
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	exchange, err := s.Arm(SmsgLogoutResponse, SmsgLogoutComplete)
+	if err != nil {
+		return err
 	}
-	if err := s.client.WaitForLogout(timeout); err != nil {
+	defer exchange.Stop()
+
+	if err := s.send(CmsgLogoutRequest, nil); err != nil {
+		return err
+	}
+
+	opcode, data, err := exchange.Next(ctx, timeout)
+	if err != nil {
+		return fmt.Errorf("wow: logout: %w", err)
+	}
+	if opcode == SmsgLogoutComplete {
+		return nil // instant logout: the server skipped the response-then-countdown
+	}
+
+	response, err := packet.ParseLogoutResponse(data)
+	if err != nil {
+		return err
+	}
+	if response.Reason != packet.LogoutReasonNone {
+		return fmt.Errorf("%w: %s", ErrLogoutRefused, response)
+	}
+
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return fmt.Errorf("wow: logout: %w", ErrTimeout)
+	}
+	if _, _, err := exchange.Next(ctx, remaining); err != nil {
 		return fmt.Errorf("wow: logout: %w", err)
 	}
 	return nil

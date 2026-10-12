@@ -61,6 +61,10 @@ var opcodeNames = map[uint16]string{
 
 	CmsgCharDelete: "CMSG_CHAR_DELETE",
 	SmsgCharDelete: "SMSG_CHAR_DELETE",
+
+	CmsgLogoutRequest:  "CMSG_LOGOUT_REQUEST",
+	SmsgLogoutResponse: "SMSG_LOGOUT_RESPONSE",
+	SmsgLogoutComplete: "SMSG_LOGOUT_COMPLETE",
 }
 
 // OpcodeName returns the AzerothCore name of opcode, or a hex rendering such as
