@@ -13,6 +13,7 @@ import (
 
 	"azerothcore-autobot/internal/agent"
 	"azerothcore-autobot/internal/bot"
+	"azerothcore-autobot/internal/wow"
 	"azerothcore-autobot/internal/wowdata"
 )
 
@@ -29,12 +30,16 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 	base := newBaseFlags(fs)
 
 	features := fs.String("features", "travel",
-		"启用的行为，逗号分隔；当前支持 travel（走路），空字符串=不启用任何行为")
+		"启用的行为，逗号分隔：travel（走路）、quest（找 NPC 接任务）；空字符串=不启用")
 	gotoSpec := fs.String("goto", "",
 		"登录后走过去的目标：x,y,z 或 map:x,y,z（例如 0:-8902.59,-162.61,82.02）")
 	untilArrival := fs.Bool("until-arrival", false, "走到 --goto 之后自动优雅退出（需要 --goto）")
+	questGiver := fs.Uint("quest-giver", 0,
+		"任务发布者的 creature entry；0 = 自动挑附近任意有任务的 NPC")
+	untilQuest := fs.Uint("until-quest", 0,
+		"把该任务接进任务日志后自动优雅退出（需要 --features quest）")
 	runFor := fs.Duration("for", 0, "最多运行多久后优雅退出（0 = 一直跑，直到 Ctrl-C）")
-	walkTimeout := fs.Duration("walk-timeout", 5*time.Minute, "等 --until-arrival 的上限")
+	untilTimeout := fs.Duration("until-timeout", 5*time.Minute, "等 --until-arrival / --until-quest 的上限")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -67,6 +72,12 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		return fmt.Errorf("autobot: travel is enabled but data_dir is empty; " +
 			"set it in the profile or AUTOBOT_DATA_DIR (maps/, mmaps/ and vmaps/ live there)")
 	}
+	if (*untilQuest != 0 || *questGiver != 0) && !specFeatures.Quest {
+		return fmt.Errorf("autobot: --until-quest and --quest-giver need --features quest")
+	}
+	if *untilArrival && *untilQuest != 0 {
+		return fmt.Errorf("autobot: --until-arrival and --until-quest cannot both stop the run")
+	}
 
 	spec := bot.Spec{
 		Name:       cfg.Character.Name,
@@ -79,16 +90,8 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		Class:      cfg.Character.Class,
 		Gender:     cfg.Character.Gender,
 		DataDir:    cfg.DataDir,
+		QuestGiver: uint32(*questGiver),
 		Features:   specFeatures,
-	}
-
-	runner, err := bot.New(spec, bot.Options{
-		Tick:   200 * time.Millisecond,
-		Logf:   logf(logger),
-		Logger: logger,
-	})
-	if err != nil {
-		return err
 	}
 
 	// Ctrl-C and SIGTERM are the stop signal: they cancel the context, which ends
@@ -96,11 +99,23 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// The data layer is opened before the runner because the features read world
+	// knowledge through it (which quests an NPC offers, what a quest requires).
 	data, err := wowdata.Open(dataOptions(cfg, logger))
 	if err != nil {
 		return err
 	}
 	defer func() { _ = data.Close() }()
+
+	runner, err := bot.New(spec, bot.Options{
+		Tick:   200 * time.Millisecond,
+		Logf:   logf(logger),
+		Logger: logger,
+		World:  data,
+	})
+	if err != nil {
+		return err
+	}
 
 	logger.Info("run: starting", "profile", orNone(cfg.Path), "account", cfg.Account.Username,
 		"character", cfg.Character.Name, "auth", cfg.AuthAddr, "features", *features,
@@ -131,19 +146,25 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		bot.GoTo(runner.Blackboard(), dest)
 	}
 
-	// The run ends when the context is cancelled, the session dies, or --for
-	// expires; --until-arrival adds "the walk finished" to that list.
+	// The run ends when the context is cancelled, the session dies, or --for expires;
+	// --until-arrival and --until-quest add "the thing I asked for happened" to that
+	// list.
 	playCtx := ctx
 	if *runFor > 0 {
 		var cancel context.CancelFunc
 		playCtx, cancel = context.WithTimeout(ctx, *runFor)
 		defer cancel()
 	}
-	if *untilArrival {
+	if *untilArrival || *untilQuest != 0 {
 		var cancel context.CancelFunc
 		playCtx, cancel = context.WithCancel(playCtx)
 		defer cancel()
-		go waitForArrival(playCtx, cancel, runner.Blackboard(), *walkTimeout, logger)
+		if *untilArrival {
+			go waitForArrival(playCtx, cancel, runner.Blackboard(), *untilTimeout, logger)
+		}
+		if *untilQuest != 0 {
+			go waitForQuest(playCtx, cancel, runner.Session(), uint32(*untilQuest), *untilTimeout, logger)
+		}
 	}
 
 	playErr := runner.Play(playCtx)
@@ -172,8 +193,10 @@ func parseFeatures(list string) (bot.Features, error) {
 			continue
 		case "travel", "walk":
 			features.Travel = true
+		case "quest":
+			features.Quest = true
 		default:
-			return features, fmt.Errorf("autobot: unknown feature %q (known: travel)", raw)
+			return features, fmt.Errorf("autobot: unknown feature %q (known: travel, quest)", raw)
 		}
 	}
 	return features, nil
@@ -210,6 +233,47 @@ func waitForArrival(ctx context.Context, cancel context.CancelFunc, bb *agent.Bl
 				logger.Warn("run: the walk request is gone without an arrival (the bot gave up), stopping")
 				cancel()
 				return
+			}
+		}
+	}
+}
+
+// stopReason explains why the loop ended, so the log answers "why did it stop"
+// waitForQuest ends the run once the quest is in the bot's quest log.
+//
+// The log is the signal, not a packet: accepting is confirmed by the log changing
+// (see wow.Session.AcceptQuest), and the log is what a client displays. Polling a real
+// condition is the point; sleeping for "long enough" would either be too short or
+// waste the run.
+func waitForQuest(ctx context.Context, cancel context.CancelFunc, sess *wow.Session,
+	questID uint32, timeout time.Duration, logger *slog.Logger) {
+
+	if sess == nil {
+		return
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			logger.Warn("run: the quest never appeared in the log",
+				"quest", questID, "timeout", timeout.String())
+			cancel()
+			return
+		case <-ticker.C:
+			for _, slot := range sess.QuestLog() {
+				if slot.QuestID == questID {
+					logger.Info("run: quest is in the log, stopping",
+						"quest", questID, "slot", slot.Index, "state", slot.State)
+					cancel()
+					return
+				}
 			}
 		}
 	}

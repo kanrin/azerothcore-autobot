@@ -54,6 +54,10 @@ type Spec struct {
 	// it just cannot go anywhere.
 	DataDir string
 
+	// QuestGiver pins the NPC the quest feature talks to, by creature entry. Zero
+	// means "whichever questgiver is in range".
+	QuestGiver uint32
+
 	Features Features
 }
 
@@ -64,6 +68,11 @@ type Spec struct {
 type Features struct {
 	// Travel registers the walker, i.e. "this bot can be sent somewhere".
 	Travel bool
+
+	// Quest registers the questgiver adapter: the bot reads the quests an NPC offers
+	// and accepts the one it can take. It needs Options.World, because deciding that
+	// is a question about the world database.
+	Quest bool
 }
 
 // Label is the name this bot is logged under.
@@ -102,6 +111,11 @@ type Options struct {
 
 	// Travel tunes the walker (arrival radius, stuck detection, replan budget).
 	Travel travel.Options
+
+	// World is the read-only world knowledge a feature needs before it can decide
+	// anything: which quests an NPC offers, what a quest requires. Nil means the
+	// features that need it cannot be enabled.
+	World *wowdata.Client
 
 	// Logf receives the AzerothGhost client's own lines.
 	Logf func(format string, args ...interface{})
@@ -406,6 +420,10 @@ func (r *Runner) refresh(_ context.Context, bb *agent.Blackboard) {
 
 	x, y, z, o, mapID := r.sess.Position()
 	inWorld := r.sess.InWorld()
+	snap := state.Snapshot{}
+	if inWorld {
+		snap = state.Read(r.sess)
+	}
 
 	bb.Set(SelfKey, Self{
 		GUID:       r.char.GUID,
@@ -414,6 +432,7 @@ func (r *Runner) refresh(_ context.Context, bb *agent.Blackboard) {
 		Y:          y,
 		Z:          z,
 		O:          o,
+		Level:      snap.Level,
 		Health:     r.sess.Health(),
 		MaxHealth:  r.sess.MaxHealth(),
 		InCombat:   r.sess.InCombat(),
@@ -421,11 +440,11 @@ func (r *Runner) refresh(_ context.Context, bb *agent.Blackboard) {
 		InWorld:    inWorld,
 	})
 
-	// Money, bags and skills come from the client's cached update fields, so this
-	// costs no packet. During a teleport that cache is being rebuilt, and a
-	// half-built snapshot would read as "the bags are empty".
+	// Money, bags, skills and the quest log come from the client's cached update
+	// fields, so this costs no packet. During a teleport that cache is being rebuilt,
+	// and a half-built snapshot would read as "the bags are empty".
 	if inWorld {
-		bb.SetSnapshot(state.Read(r.sess))
+		bb.SetSnapshot(snap)
 		r.keepAlive(bb.Now())
 	}
 }

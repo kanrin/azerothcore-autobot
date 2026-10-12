@@ -171,6 +171,18 @@ func newTravelBehavior(w walker, logger *slog.Logger) *travelBehavior {
 	return &travelBehavior{walker: w, logger: logger, now: time.Now}
 }
 
+// questTimeoutFrom returns the questgiver round-trip budget. It is derived from the
+// tick so a bot with a slow cadence does not time out between two of its own ticks;
+// the server answers these from memory, so anything above a few seconds is already
+// generous.
+func questTimeoutFrom(tick time.Duration) time.Duration {
+	timeout := 10 * tick
+	if timeout < 5*time.Second {
+		timeout = 5 * time.Second
+	}
+	return timeout
+}
+
 // registry builds this runner's behaviors.
 //
 // It is the only place where a feature switch becomes a behavior, so adding a
@@ -183,6 +195,15 @@ func (r *Runner) registry() (*agent.Registry, error) {
 			return nil, errors.New("feature travel is enabled but no pathfinding is configured")
 		}
 		behaviors = append(behaviors, newTravelBehavior(r.walker, r.opts.Logger))
+	}
+
+	if r.spec.Features.Quest {
+		if r.opts.World == nil {
+			return nil, errors.New("feature quest is enabled but no world knowledge is attached (Options.World)")
+		}
+		behaviors = append(behaviors, newQuestBehavior(
+			r.sess, r.opts.World, clientGivers{r.sess.Client()}, r.opts.Logger,
+			r.spec.QuestGiver, questTimeoutFrom(r.opts.Tick)))
 	}
 
 	if len(behaviors) == 0 {

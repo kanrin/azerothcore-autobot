@@ -28,13 +28,20 @@ const (
 
 // Self is the part of the bot's own state that a decision needs.
 type Self struct {
-	GUID       uint64
-	MapID      uint32
-	X, Y, Z    float32
-	O          float32
-	Health     uint32
-	MaxHealth  uint32
-	InCombat   bool
+	GUID    uint64
+	MapID   uint32
+	X, Y, Z float32
+	O       float32
+	// Health and combat state, as of the last server update.
+	Health    uint32
+	MaxHealth uint32
+	InCombat  bool
+
+	// Level is the character's own level, from UNIT_FIELD_LEVEL. Features that weigh
+	// a requirement against the bot (quests, trainers, vendors) need it, and reading
+	// it live rather than from the login snapshot is what keeps it true after a
+	// level-up.
+	Level      uint8
 	TargetGUID uint64
 
 	// InWorld is false while a teleport is in flight or the session is not

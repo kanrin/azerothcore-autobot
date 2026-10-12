@@ -28,7 +28,7 @@ AH 经济、战场、成就按配置默认关闭，设计保留。
 | 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（单测 84.1%）。**实盘走动被一个 mmap 版本差异挡住**，见下方坑 16 |
 | 1.8 | 常驻 loop（`autobot run`） | ✅ **实盘通过**：`internal/bot` 运行时（登录 → agent 每 200ms tick → 优雅登出）+ `autobot run`；实跑 119 tick 后 SIGINT → `agent: stopped` → `reason=signal` → `Logout complete`（约 19.7s 后 `SMSG_LOGOUT_COMPLETE`，正是 AC 的 20s 倒计时）→ DB `online=0`，无 ghost session；`TestRunResidentLoop` 自动复现同一结论 |
 | 2 | 多 bot 编排（fleet） | ✅ **实盘通过**：`internal/fleet`（fleet.yml + roster/*.yml、登录节流、阵营平衡、provision/status/gc、常驻监督器）+ `autobot fleet ...`；实测 **3 个 bot 同时在线 59s、`clean=3`、0 错误**，随后 3 个角色全部 `online=0` 并优雅登出；`provision` 重跑幂等（账号不重复创建）、`gc` 幂等（第二次全部 `absent`）；阵营 2 联盟/1 部落、偏差 0.33 在容差 0.34 内；`TestFleetLifecycle` 自动复现整条链 |
-| 2 | 任务进行 | 仅发送侧：`CMSG_QUEST_*` 与 gossip 编码 + `Session` 封装；**缺** SMSG 解析、任务日志、状态机 |
+| 2 | 任务进行（M3 第一片） | ✅ **实盘通过"接任务"**：`SMSG_GOSSIP_MESSAGE`/`QUEST_LIST`/`QUEST_DETAILS`/`QUEST_INVALID`/`QUESTUPDATE_*` 解析（golden bytes）、任务日志从更新字段读取（`PLAYER_QUEST_LOG_1_1+slot*5`）、`wowdata` 世界知识、`feature/quest` 选择器、`bot` 行为 + `run --features quest`。实测：bot001 自动发现出生点旁 2.3 码的 Deputy Willem → 读到他给的 783 "A Threat Within" → 查询详情 → 接受 → 任务进日志（slot 0, state 0x1）→ 登出后 `character_queststatus` 出现 `quest=783 status=1`。`TestQuestAcceptPutsItInTheLog` 自动复现。**缺**：回交（`REQUEST_ITEMS`/`OFFER_REWARD`/`CHOOSE_REWARD` 解析 + 走到 ender）、击杀/收集类目标推进（需战斗 + 走路） |
 | 3 | 组队接受 | 未开始（上游已有邀请/接受/转队长/解散接口，按规则复用而非重写） |
 | 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机。2–3 个 bot 凑不齐 5 人随机本，进本走"手工组队 + 走到副本门口"的回退路径并在日志标注 |
 | 5 | 副本内推进 | 未开始 |
@@ -57,6 +57,8 @@ bin/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --cla
 # 常驻 loop（M1 收尾）：Ctrl-C 优雅退出，日志 agent: running / agent: stopped / bot: logged out
 bin/autobot run --account autobotprobe --char-name Autobotprobe --race 1 --class 1
 #   --features ""        不启用任何行为（只在线，用来验证 loop 与保活）
+#   --features quest     找附近的任务发布者接活（--quest-giver N 可指定 creature entry）
+#   --until-quest 783    该任务进日志后自动优雅退出
 #   --for 60s            跑满时长后自行优雅退出
 #   --goto 0:-8902.59,-162.61,82.02 --until-arrival   走到该点后退出（需要 mmap，见坑 16）
 
@@ -340,6 +342,26 @@ require (
     优先、`E2E_AUTH_ADDR` 兜底（与 profile 的优先级一致）。实盘第一次 `fleet provision --characters`
     因为只认 `AUTOBOT_AUTH_ADDR` 而连 `127.0.0.1:3724` 失败——账号写成功了、建号全失败，正好把
     "每一步都要有真实前置"这件事演示了一遍。
+23. **`CMSG_QUESTGIVER_HELLO` 的回复不一定是任务列表**：实盘发现 Deputy Willem（`npcflag=3`，含 QUESTGIVER）
+    回的是 **`SMSG_GOSSIP_MESSAGE`**，不是 `SMSG_QUESTGIVER_QUEST_LIST`。三条路径都在 AC 源码里：
+    `HandleQuestgiverHelloOpcode` 以 `SendPreparedGossip` 收尾（`QuestHandler.cpp:107`），而
+    `Player::PrepareQuestMenu` 多任务时发列表（`PlayerQuest.cpp:199`）、恰好一个相关任务时直接发
+    `QUEST_DETAILS`（`:148`）。三者都带该 NPC 的**任务菜单**（`GossipDef.cpp:214-234`，字段与列表条目相同），
+    所以 `Session.QuestGiverHello` 三种都收——**不要假设只有列表**。
+24. **接受任务的确认不是回包，是任务日志变化**：AC 成功与拒绝时都发 `SMSG_GOSSIP_COMPLETE`
+    （`QuestHandler.cpp:166-197` 两条路径都以 `SendCloseGossip` 收尾），所以 `AcceptQuest` 必须等
+    `PLAYER_QUEST_LOG_1_1 + slot*5` 里出现该任务（`Session.WaitFor` + `state.Read`）；超时即"服务端没加进去"。
+25. **任务日志不是包，是 25 个更新字段**：`PLAYER_QUEST_LOG_1_1..25_5`（`UpdateFields.h:186-285`），每槽 5 个
+    uint32（`Player.h:615` MAX_QUEST_OFFSET=5）：+0 id、+1 状态位、+2..+3 四个 uint16 计数、+4 时间
+    （`Player.h:609-612`、`1512`、`1522-1527`）。计数是**四个独立的 uint16**（不是"当前/总数"对，总数在
+    `quest_template`）；状态位是掩码（`SetQuestSlotState` 用 `SetFlag`）。
+26. **`character_queststatus` 是角色保存时才写的**：实测接完任务立刻查库查不到，登出后才出现。
+    `status` 取值见 `QuestDef.h:98-108`：1=COMPLETE、3=INCOMPLETE、5=FAILED。783 这类送信任务
+    （`activateAccept`、无击杀/收集要求）**一接就完成**——客户端日志 `state=1` 与库里 `status=1` 独立吻合。
+27. **世界库列名与多数文档不一致**（用 `information_schema` 查实，别照抄老文档）：`quest_template.ID`
+    （大写，不是 `entry`）、`creature.id`（不是 `id1/id2/id3`）、`creature_queststarter.id`=生物模板
+    entry、`quest`=任务 id。且该表是**全量**关系：服务端会按等级/前置/条件过滤（Willem 表里有 5 个任务，
+    对一个 1 级角色只给出 1 个）——以服务端发来的菜单为准，别拿表当答案。
 
 ## 边界（明确不做）
 

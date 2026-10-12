@@ -120,6 +120,11 @@ type Snapshot struct {
 	// Skills holds every non-empty PLAYER_SKILL_INFO_1_1 entry, in slot order.
 	Skills []Skill
 
+	// Level is the character's own level, UNIT_FIELD_LEVEL. Features weigh
+	// requirements against it (a quest's MinLevel, a trainer's spells), so it is part
+	// of the snapshot rather than a login-time value.
+	Level uint8
+
 	// Containers reports the backpack and the equipped bags only: the bank is
 	// not part of "can I keep looting".
 	Containers []ContainerInfo

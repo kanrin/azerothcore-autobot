@@ -76,35 +76,84 @@ func (r QuestFailedReason) String() string {
 	}
 }
 
-// QuestGiverHello opens the quest dialog for one NPC and returns the quest list it
-// offers.
+// QuestGiverQuestion is what opening a questgiver dialog yields: the quests the NPC
+// has for this player, and which packet carried them.
+type QuestGiverQuestion struct {
+	// GiverGUID is the NPC that answered.
+	GiverGUID uint64
+
+	// Greeting is the NPC's line when there is one. For a gossip answer it is the
+	// text id instead, which is why it is only ever logged.
+	Greeting string
+
+	// Quests is what the NPC offers or has in progress for this player.
+	Quests []packet.QuestListEntry
+
+	// AnsweredWith is the opcode that carried the list. It is recorded rather than
+	// assumed because a live run showed a plain quest giver answering with the gossip
+	// menu: the two paths are both real, and which one an NPC uses is server data.
+	AnsweredWith uint16
+}
+
+// QuestGiverHello opens the quest dialog for one NPC and returns the quests it has.
 //
-// AC QuestHandler.cpp:79-82 reads the guid; HandleQuestgiverHelloOpcode answers with
-// the list. A creature that offers nothing still answers, with an empty list, which is
-// why the caller gets a list rather than an error.
-func (s *Session) QuestGiverHello(ctx context.Context, npcGUID uint64, timeout time.Duration) (packet.QuestList, error) {
-	var empty packet.QuestList
+// Three answers are possible, all of them in the AC source:
+//
+//	SMSG_QUESTGIVER_QUEST_LIST     the usual list (PlayerQuest.cpp:199)
+//	SMSG_QUESTGIVER_QUEST_DETAILS  exactly one quest is relevant, so the server opens
+//	                               that quest's dialog instead of a list (:148)
+//	SMSG_GOSSIP_MESSAGE            the NPC has a gossip menu; HandleQuestgiverHelloOpcode
+//	                               ends in SendPreparedGossip (QuestHandler.cpp:107) and
+//	                               the menu's quest section carries the same entries
+//
+// The third is not a fallback: it is what the first live run of this feature met. All
+// three carry the NPC's quest menu, so the caller gets the same thing either way.
+func (s *Session) QuestGiverHello(ctx context.Context, npcGUID uint64, timeout time.Duration) (QuestGiverQuestion, error) {
+	var out QuestGiverQuestion
 	if npcGUID == 0 {
-		return empty, errors.New("wow: questgiver hello: guid is zero")
+		return out, errors.New("wow: questgiver hello: guid is zero")
 	}
 	if timeout <= 0 {
 		timeout = DefaultQuestTimeout
 	}
 
-	opcode, data, err := s.Do(ctx, CmsgQuestgiverHello,
-		packet.EncodeQuestgiverHello(npcGUID), []uint16{SmsgQuestgiverQuestList}, timeout)
+	opcode, data, err := s.Do(ctx, CmsgQuestgiverHello, packet.EncodeQuestgiverHello(npcGUID),
+		[]uint16{SmsgQuestgiverQuestList, SmsgGossipMessage, SmsgQuestgiverQuestDetails}, timeout)
 	if err != nil {
-		return empty, fmt.Errorf("wow: questgiver hello: %w", err)
-	}
-	if opcode != SmsgQuestgiverQuestList {
-		return empty, fmt.Errorf("wow: questgiver hello: unexpected reply %s", OpcodeName(opcode))
+		return out, fmt.Errorf("wow: questgiver hello: %w", err)
 	}
 
-	list, err := packet.ParseQuestGiverQuestList(data)
-	if err != nil {
-		return empty, err
+	out.GiverGUID, out.AnsweredWith = npcGUID, opcode
+	switch opcode {
+	case SmsgQuestgiverQuestList:
+		list, parseErr := packet.ParseQuestGiverQuestList(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Greeting, out.Quests = list.Greeting, list.Entries
+
+	case SmsgGossipMessage:
+		message, parseErr := packet.ParseGossipMessage(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Greeting = fmt.Sprintf("gossip text %d, %d options", message.TextID, len(message.Options))
+		out.Quests = message.Quests
+
+	case SmsgQuestgiverQuestDetails:
+		details, parseErr := packet.ParseQuestGiverQuestDetails(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Greeting = details.Title
+		out.Quests = []packet.QuestListEntry{{
+			ID: details.QuestID, Title: details.Title,
+		}}
+
+	default:
+		return out, fmt.Errorf("wow: questgiver hello: unexpected reply %s", OpcodeName(opcode))
 	}
-	return list, nil
+	return out, nil
 }
 
 // QueryQuest asks for one quest's details.

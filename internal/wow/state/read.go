@@ -16,6 +16,7 @@ func Read(src Source) Snapshot {
 	}
 
 	snap.Money = self.Value(playerFieldCoinage)
+	snap.Level = uint8(self.Level())
 
 	snap.Quests = readQuestLog(self)
 
