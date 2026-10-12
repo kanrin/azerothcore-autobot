@@ -42,6 +42,10 @@ import (
 // then the bot account stays in the auth database, which is harmless on a
 // server that had zero accounts before.
 const (
+	// smokePrefix is the bot prefix the data layer's guard enforces: every name
+	// it is allowed to touch starts with it.
+	smokePrefix = "autobot"
+
 	smokeAccount  = "autobotprobe"
 	smokePassword = "autobotpass"
 	smokeCharName = "Autobotprobe"

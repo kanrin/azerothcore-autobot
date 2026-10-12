@@ -2,6 +2,12 @@
 
 package e2e
 
+// The file name is deliberately last in sort order, and that is load-bearing:
+// `go test` runs the tests of a package in the order the files are read, which
+// is alphabetical, and this case deletes the account and character the others
+// create. Naming it zz_cleanup_test.go is what makes
+// `go test -tags=e2e ./test/e2e/...` leave the server as it found it.
+
 import (
 	"context"
 	"database/sql"
@@ -41,7 +47,7 @@ func TestCleanupRemovesBotData(t *testing.T) {
 		AuthDSN:  e2eharness.AuthDSN,
 		CharDSN:  e2eharness.CharDSN,
 		WorldDSN: e2eharness.WorldDSN,
-		Prefix:   "autobot",
+		Prefix:   smokePrefix,
 		Logf:     t.Logf,
 	})
 	if err != nil {
