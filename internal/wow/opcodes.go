@@ -48,6 +48,7 @@ const (
 	CmsgQuestgiverAcceptQuest   uint16 = 0x189
 	CmsgQuestgiverCompleteQuest uint16 = 0x18A
 	SmsgQuestgiverRequestItems  uint16 = 0x18B
+	CmsgQuestgiverRequestReward uint16 = 0x18C
 	SmsgQuestgiverOfferReward   uint16 = 0x18D
 	CmsgQuestgiverChooseReward  uint16 = 0x18E
 	SmsgQuestgiverQuestInvalid  uint16 = 0x18F

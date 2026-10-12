@@ -171,9 +171,14 @@ func (s *Session) RealmAddress() string { return s.realmAddr }
 // or privileged; otherwise WorldSession.h:547 is
 // `curr_time >= _logout_time + 20`, so SMSG_LOGOUT_COMPLETE arrives about 20
 // seconds after the request. Upstream's own e2e harness waits 30 seconds for
-// exactly this reason. A shorter timeout here turns a normal logout into a
-// spurious failure.
-const DefaultLogoutTimeout = 30 * time.Second
+// exactly this reason.
+//
+// This is 45 rather than 30 because the countdown only starts when the server *processes*
+// the request, and the failure mode of a tight bound is a false "logout timeout" under
+// load — which the fleet suite produced once while three characters were being created
+// back to back. The wait ends as soon as the packet arrives, so the extra slack costs
+// nothing when the server is idle.
+const DefaultLogoutTimeout = 45 * time.Second
 
 // Logout sends CMSG_LOGOUT_REQUEST and waits for the session to end.
 //

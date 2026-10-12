@@ -23,6 +23,7 @@ var opcodeNames = map[uint16]string{
 	SmsgQuestgiverQuestDetails:  "SMSG_QUESTGIVER_QUEST_DETAILS",
 	CmsgQuestgiverAcceptQuest:   "CMSG_QUESTGIVER_ACCEPT_QUEST",
 	CmsgQuestgiverCompleteQuest: "CMSG_QUESTGIVER_COMPLETE_QUEST",
+	CmsgQuestgiverRequestReward: "CMSG_QUESTGIVER_REQUEST_REWARD",
 	SmsgQuestgiverRequestItems:  "SMSG_QUESTGIVER_REQUEST_ITEMS",
 	SmsgQuestgiverOfferReward:   "SMSG_QUESTGIVER_OFFER_REWARD",
 	CmsgQuestgiverChooseReward:  "CMSG_QUESTGIVER_CHOOSE_REWARD",

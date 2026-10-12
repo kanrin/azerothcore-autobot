@@ -40,19 +40,36 @@ const (
 	// questMaxGiversPerRun bounds how many NPCs one bot visits in a session, so a
 	// misconfigured roster cannot turn into an endless tour of the zone.
 	questMaxGiversPerRun = 5
+
+	// questMaxVisitsPerGiver is how many conversations one NPC gets. Two, because a
+	// visit can hand in a finished quest and then ask what else there is, and a quest
+	// that cannot be handed in yet may become handable later in the run (a kill counted
+	// by combat, for instance).
+	questMaxVisitsPerGiver = 2
 )
+
+// giver is the NPC a visit talks to: the guid to address and the entry to look its
+// quest relations up by.
+type giver struct {
+	GUID  uint64
+	Entry uint32
+}
 
 // questSession is the part of wow.Session this file uses.
 type questSession interface {
 	QuestGiverHello(ctx context.Context, npcGUID uint64, timeout time.Duration) (wow.QuestGiverQuestion, error)
 	QueryQuest(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) (packet.QuestDetails, error)
 	AcceptQuest(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) error
+	CompleteQuest(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) (wow.QuestTurnIn, error)
+	RequestReward(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) (wow.QuestTurnIn, error)
+	ChooseReward(ctx context.Context, npcGUID uint64, questID, reward uint32, timeout time.Duration) (packet.QuestReward, error)
 	QuestLog() []state.QuestSlot
 }
 
 // questWorld is the world knowledge this file uses. *wowdata.Client satisfies it.
 type questWorld interface {
 	QuestsOfferedBy(ctx context.Context, creatureEntry uint32) ([]uint32, error)
+	QuestsEndedBy(ctx context.Context, creatureEntry uint32) ([]uint32, error)
 	QuestsByIDs(ctx context.Context, ids []uint32) (map[uint32]wowdata.Quest, error)
 }
 
@@ -109,65 +126,152 @@ type questBehavior struct {
 	// timeout bounds one questgiver round trip.
 	timeout time.Duration
 
-	// visited records the givers this run has talked to, so each is asked once instead
-	// of every tick. The key is the NPC's guid, not its entry: two instances of the
-	// same creature are two conversations.
-	visited map[uint64]bool
+	// visits counts how many conversations each giver has had, so one is asked again
+	// only for a reason (see questMaxVisitsPerGiver) instead of every tick. The key is
+	// the NPC's guid, not its entry: two instances of the same creature are two
+	// conversations.
+	visits map[uint64]int
 
-	// offers caches the world knowledge per creature entry: a creature's quest list
-	// does not change, and asking the database every tick would be silly.
+	// offers and ends cache the world knowledge per creature entry: a creature's quest
+	// relations do not change, and asking the database every tick would be silly.
 	offers map[uint32][]uint32
+	ends   map[uint32][]uint32
 
-	// accepted records what this run took, for the summary line.
+	// accepted and rewarded record what this run did, for the summary line.
 	accepted []uint32
+	rewarded []uint32
 }
 
 // Name identifies the behavior in logs and telemetry.
 func (b *questBehavior) Name() string { return "quest" }
 
-// Score wants to run while there is a giver in range this run has not visited yet.
-//
-// It cannot tell "in range" from "is actually a questgiver" without the database, and
-// the database does not belong in Score — so the first tick on a non-giver does one
-// lookup, learns better, and the score drops. One wasted tick, once.
+// Score wants to run while there is a giver in range that this run has not finished
+// with, and while the run's conversation budget lasts.
 func (b *questBehavior) Score(bb *agent.Blackboard) int {
-	if len(b.visited) >= questMaxGiversPerRun {
-		return 0
-	}
 	if _, ok := SelfOf(bb); !ok {
 		return 0
 	}
-	if b.giverGUID() == 0 {
+
+	conversations := 0
+	for _, count := range b.visits {
+		conversations += count
+	}
+	if conversations >= questMaxGiversPerRun*questMaxVisitsPerGiver {
+		return 0
+	}
+
+	if _, ok := b.giver(); !ok {
 		return 0
 	}
 	return questScore
 }
 
-// Run talks to one giver: hello, pick, ask for the details, accept.
+// Run visits one giver: hand in what is finished, then take what is new.
+//
+// One conversation can do both, which is what a player does — and the visit budget
+// (questMaxVisitsPerGiver) exists because a quest that cannot be handed in yet may become
+// handable later in the same run.
 func (b *questBehavior) Run(ctx context.Context, bb *agent.Blackboard) error {
 	self, ok := SelfOf(bb)
 	if !ok || !self.InWorld {
 		return errors.New("quest: the bot is not in the world")
 	}
 
-	guid := b.giverGUID()
-	if guid == 0 {
+	target, ok := b.giver()
+	if !ok {
 		return agent.Done
 	}
+	b.visits[target.GUID]++
 
-	list, err := b.sess.QuestGiverHello(ctx, guid, b.timeout)
+	if err := b.turnIn(ctx, target); err != nil {
+		return err
+	}
+	return b.accept(ctx, target, self)
+}
+
+// turnIn hands in one finished quest at a giver that ends it, if the bot has one.
+func (b *questBehavior) turnIn(ctx context.Context, target giver) error {
+	log := b.sess.QuestLog()
+	if len(log) == 0 {
+		return nil
+	}
+
+	ended := map[uint32]bool{}
+	for _, id := range b.endsFor(target.Entry) {
+		ended[id] = true
+	}
+
+	entries := make([]quest.LogEntry, 0, len(log))
+	complete := map[uint32]bool{}
+	for _, slot := range log {
+		entries = append(entries, quest.LogEntry{ID: slot.QuestID, Complete: slot.IsComplete()})
+		complete[slot.QuestID] = slot.IsComplete()
+	}
+
+	questID, ok := quest.ChooseTurnIn(entries, ended)
+	if !ok {
+		for _, skip := range quest.ExplainTurnIn(entries, ended) {
+			b.logger.Info("quest: not handing in", "npc", target.GUID,
+				"quest", skip.Candidate.ID, "reason", skip.Reason)
+		}
+		return nil
+	}
+
+	turnIn, err := b.sess.CompleteQuest(ctx, target.GUID, questID, b.timeout)
+	if err != nil {
+		return fmt.Errorf("quest: hand in %d at npc %d: %w", questID, target.GUID, err)
+	}
+	b.logger.Info("quest: handed in", "npc", target.GUID, "quest", questID, "title", turnIn.Title,
+		"opcode", wow.OpcodeName(turnIn.AnsweredWith), "ready", turnIn.Ready,
+		"choices", turnIn.Choices, "text", turnIn.Text)
+
+	// A quest that requires items answers the hand-in with the items dialog even when
+	// everything is in hand: the reward then has to be asked for separately, which is what
+	// a client's "Complete Quest" button does (QuestHandler.cpp:517-518 then :355-379).
+	if !turnIn.Ready && complete[questID] {
+		offer, rewardErr := b.sess.RequestReward(ctx, target.GUID, questID, b.timeout)
+		if rewardErr != nil {
+			return fmt.Errorf("quest: ask for the reward of %d: %w", questID, rewardErr)
+		}
+		b.logger.Info("quest: asked for the reward", "npc", target.GUID, "quest", questID,
+			"opcode", wow.OpcodeName(offer.AnsweredWith), "ready", offer.Ready,
+			"choices", offer.Choices, "text", offer.Text)
+		turnIn = offer
+	}
+
+	if !turnIn.Ready {
+		// The server answered with what is still missing. Nothing to do about it here, and
+		// the text it sent is already in the log line above.
+		return nil
+	}
+
+	// Reward 0 is the first option and the only sensible choice when there is none:
+	// AzerothCore rejects 6 and up (QuestHandler.cpp:255-263).
+	reward, err := b.sess.ChooseReward(ctx, target.GUID, questID, 0, b.timeout)
+	if err != nil {
+		return fmt.Errorf("quest: choose the reward for %d: %w", questID, err)
+	}
+	b.rewarded = append(b.rewarded, questID)
+	b.logger.Info("quest: rewarded", "npc", target.GUID, "quest", questID,
+		"experience", reward.Experience, "money", reward.Money, "honor", reward.Honor,
+		"talent_points", reward.TalentPoints, "rewarded_this_run", b.rewarded)
+	return nil
+}
+
+// accept takes the best quest the giver has that the bot can do.
+func (b *questBehavior) accept(ctx context.Context, target giver, self Self) error {
+	list, err := b.sess.QuestGiverHello(ctx, target.GUID, b.timeout)
 	if err != nil {
 		// A failed hello is a protocol or range problem, not "nothing to do": report it
 		// so the agent backs this behavior off and the log says why.
-		return fmt.Errorf("quest: open the dialog with npc %d: %w", guid, err)
+		return fmt.Errorf("quest: open the dialog with npc %d: %w", target.GUID, err)
 	}
-	b.visited[guid] = true
-	b.logger.Info("quest: the npc answered", "npc", guid,
+	b.logger.Info("quest: the npc answered", "npc", target.GUID,
 		"opcode", wow.OpcodeName(list.AnsweredWith), "quests", len(list.Quests),
 		"greeting", list.Greeting)
 
 	if len(list.Quests) == 0 {
-		b.logger.Info("quest: the npc has nothing to offer", "npc", guid)
+		b.logger.Info("quest: the npc has nothing to offer", "npc", target.GUID)
 		return agent.Done
 	}
 
@@ -193,7 +297,8 @@ func (b *questBehavior) Run(ctx context.Context, bb *agent.Blackboard) error {
 		} else {
 			// The giver lists a quest with no template: a server data problem, and
 			// guessing its requirements would be worse than reporting it.
-			b.logger.Warn("quest: the npc offers a quest with no template", "npc", guid, "quest", entry.ID)
+			b.logger.Warn("quest: the npc offers a quest with no template", "npc", target.GUID,
+				"quest", entry.ID)
 			candidate.MinLevel = 255
 		}
 		candidates = append(candidates, candidate)
@@ -202,21 +307,21 @@ func (b *questBehavior) Run(ctx context.Context, bb *agent.Blackboard) error {
 	pick, ok := quest.ChooseAcceptable(candidates, self.Level)
 	if !ok {
 		for _, skip := range quest.Explain(candidates, self.Level) {
-			b.logger.Info("quest: skipping", "npc", guid, "quest", skip.Candidate.ID,
+			b.logger.Info("quest: skipping", "npc", target.GUID, "quest", skip.Candidate.ID,
 				"title", skip.Candidate.Title, "quest_level", skip.Candidate.Level,
 				"min_level", skip.Candidate.MinLevel, "reason", skip.Reason)
 		}
 		return agent.Done
 	}
 
-	details, err := b.sess.QueryQuest(ctx, guid, pick.ID, b.timeout)
+	details, err := b.sess.QueryQuest(ctx, target.GUID, pick.ID, b.timeout)
 	if err != nil {
 		return fmt.Errorf("quest: details of %d: %w", pick.ID, err)
 	}
-	b.logger.Info("quest: taking", "npc", guid, "quest", pick.ID, "title", details.Title,
+	b.logger.Info("quest: taking", "npc", target.GUID, "quest", pick.ID, "title", details.Title,
 		"level", pick.Level, "min_level", pick.MinLevel, "objectives", details.Objectives)
 
-	if err := b.sess.AcceptQuest(ctx, guid, pick.ID, b.timeout); err != nil {
+	if err := b.sess.AcceptQuest(ctx, target.GUID, pick.ID, b.timeout); err != nil {
 		// The interesting failure is a refusal: the requirements were not met, or the
 		// server never added the quest. The template says what it wanted, so put that in
 		// the error instead of leaving the caller with a bare "timeout".
@@ -225,7 +330,7 @@ func (b *questBehavior) Run(ctx context.Context, bb *agent.Blackboard) error {
 	}
 
 	b.accepted = append(b.accepted, pick.ID)
-	b.logger.Info("quest: accepted", "npc", guid, "quest", pick.ID, "title", details.Title,
+	b.logger.Info("quest: accepted", "npc", target.GUID, "quest", pick.ID, "title", details.Title,
 		"quest_log_size", len(b.sess.QuestLog()), "accepted_this_run", b.accepted)
 	return nil
 }
@@ -235,42 +340,59 @@ func (b *questBehavior) Run(ctx context.Context, bb *agent.Blackboard) error {
 // re-derived by whoever reads the agent next.
 func (b *questBehavior) Stop(context.Context) error { return nil }
 
-// giverGUID returns the NPC to talk to, or 0 when there is none in range or the one
-// there has already been visited.
-func (b *questBehavior) giverGUID() uint64 {
+// giver returns the NPC to talk to, or false when there is none in range that still has
+// visits left.
+//
+// Without a configured entry it asks the world database which nearby creature offers or
+// ends anything — that is how a bot discovers work without being told where to look. The
+// entry→relations caches make the second call free, and a lookup error yields an empty
+// list so the next tick retries rather than the behavior failing.
+func (b *questBehavior) giver() (giver, bool) {
 	if b.giverEntry != 0 {
 		guid := b.units.FindUnitByEntry(b.giverEntry, questInteractRange)
-		if guid == 0 || b.visited[guid] {
-			return 0
+		if guid == 0 || b.visits[guid] >= questMaxVisitsPerGiver {
+			return giver{}, false
 		}
-		return guid
+		return giver{GUID: guid, Entry: b.giverEntry}, true
 	}
 
 	for _, unit := range b.units.NearbyUnits(questInteractRange) {
-		if b.visited[unit.GUID] || len(b.offersFor(unit.Entry)) == 0 {
+		if b.visits[unit.GUID] >= questMaxVisitsPerGiver {
 			continue
 		}
-		return unit.GUID
+		if len(b.offersFor(unit.Entry)) == 0 && len(b.endsFor(unit.Entry)) == 0 {
+			continue
+		}
+		return giver{GUID: unit.GUID, Entry: unit.Entry}, true
 	}
-	return 0
+	return giver{}, false
 }
 
 // offersFor returns the quests a creature entry offers, cached.
-//
-// The cache is what keeps the auto-discovery path from querying the database for every
-// unit in range on every tick. A lookup error yields an empty list: the next tick
-// retries, where failing the behavior would turn a transient database problem into a
-// bot that looks broken.
 func (b *questBehavior) offersFor(entry uint32) []uint32 {
 	if cached, ok := b.offers[entry]; ok {
 		return cached
 	}
 	ids, err := b.world.QuestsOfferedBy(context.Background(), entry)
 	if err != nil {
-		b.logger.Warn("quest: cannot read the quests of a creature", "entry", entry, "err", err.Error())
+		b.logger.Warn("quest: cannot read the quests a creature offers", "entry", entry, "err", err.Error())
 		ids = nil
 	}
 	b.offers[entry] = ids
+	return ids
+}
+
+// endsFor returns the quests a creature entry accepts a hand-in for, cached.
+func (b *questBehavior) endsFor(entry uint32) []uint32 {
+	if cached, ok := b.ends[entry]; ok {
+		return cached
+	}
+	ids, err := b.world.QuestsEndedBy(context.Background(), entry)
+	if err != nil {
+		b.logger.Warn("quest: cannot read the quests a creature ends", "entry", entry, "err", err.Error())
+		ids = nil
+	}
+	b.ends[entry] = ids
 	return ids
 }
 
@@ -298,7 +420,8 @@ func newQuestBehavior(sess questSession, world questWorld, units giverFinder,
 		logger:     logger,
 		giverEntry: giverEntry,
 		timeout:    timeout,
-		visited:    map[uint64]bool{},
+		visits:     map[uint64]int{},
 		offers:     map[uint32][]uint32{},
+		ends:       map[uint32][]uint32{},
 	}
 }

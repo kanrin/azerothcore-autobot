@@ -52,6 +52,15 @@ func TestEncodeQuest(t *testing.T) {
 				" D2 04 00 00",
 		},
 		{
+			// AC QuestHandler.cpp:359 — guid, questId. The same shape as
+			// CompleteQuest, which is why the two are easy to mix up: one asks "is it
+			// done", the other asks "give me the reward".
+			name: "QuestgiverRequestReward",
+			got:  EncodeQuestgiverRequestReward(npcGUID, questID),
+			want: "BC 0A 00 00 00 00 00 00" +
+				" D2 04 00 00",
+		},
+		{
 			// AC QuestHandler.cpp:255 — guid, questId, reward.
 			name: "QuestgiverChooseReward",
 			got:  EncodeQuestgiverChooseReward(npcGUID, questID, 2),

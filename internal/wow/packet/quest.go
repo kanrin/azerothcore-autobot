@@ -56,6 +56,18 @@ func EncodeQuestgiverCompleteQuest(npcGUID uint64, questID uint32) []byte {
 	return NewWriter().RawGUID(npcGUID).Uint32(questID).Bytes()
 }
 
+// EncodeQuestgiverRequestReward encodes CMSG_QUESTGIVER_REQUEST_REWARD (0x18C).
+//
+// AC: QuestHandler.cpp:355-359, `recvData >> guid >> questId`.
+//
+// This is the packet a client sends from its "Complete Quest" button when the quest
+// asks for items: CMSG_QUESTGIVER_COMPLETE_QUEST only produces the "you still need …"
+// dialog for a quest with required items, and this one is what answers with the reward
+// offer (QuestHandler.cpp:377-378).
+func EncodeQuestgiverRequestReward(npcGUID uint64, questID uint32) []byte {
+	return NewWriter().RawGUID(npcGUID).Uint32(questID).Bytes()
+}
+
 // EncodeQuestgiverChooseReward encodes CMSG_QUESTGIVER_CHOOSE_REWARD (0x18E).
 //
 // AC: QuestHandler.cpp:250-255, `recvData >> guid >> questId >> reward`.

@@ -228,8 +228,174 @@ func (s *Session) AcceptQuest(ctx context.Context, npcGUID uint64, questID uint3
 	return nil
 }
 
-// QuestLog returns the bot's current quest log.
+// QuestTurnIn is what the server answers "here is my finished quest" with.
+type QuestTurnIn struct {
+	QuestID uint32
+	Title   string
+
+	// Ready is true when the server offered the reward, i.e. the quest can be handed
+	// in. False means it answered with the requirements instead — the same dialog a
+	// player sees when something is still missing.
+	Ready bool
+
+	// Text is the reward text when Ready and the completion text when not, which is
+	// the most useful thing to put in a log line.
+	Text string
+
+	// Choices is how many reward options the offer carries (0 for most quests).
+	Choices int
+
+	// AnsweredWith is the opcode, recorded because which dialog arrives is the answer
+	// to "is it done yet" and is worth seeing in the log.
+	AnsweredWith uint16
+}
+
+// CompleteQuest tells a questgiver that a quest is finished and reports whether the
+// server agreed.
 //
+// AC QuestHandler.cpp:478-521 — the NPC has to be involved in the quest (an ender, not
+// just any questgiver) and in interaction range; the answer is
+// SMSG_QUESTGIVER_OFFER_REWARD when it is ready (SendQuestGiverRequestItems forwards to
+// it as soon as nothing is left to hand over, GossipDef.cpp:771-775) or
+// SMSG_QUESTGIVER_REQUEST_ITEMS with the reason when it is not.
+//
+// A silent answer means the NPC was not an ender, was out of range, or the quest is not
+// in the log: all three make the handler return without a packet (QuestHandler.cpp:488-502).
+func (s *Session) CompleteQuest(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) (QuestTurnIn, error) {
+	var out QuestTurnIn
+	if npcGUID == 0 || questID == 0 {
+		return out, errors.New("wow: complete quest: guid and quest id are required")
+	}
+	if timeout <= 0 {
+		timeout = DefaultQuestTimeout
+	}
+
+	opcode, data, err := s.Do(ctx, CmsgQuestgiverCompleteQuest,
+		packet.EncodeQuestgiverCompleteQuest(npcGUID, questID),
+		[]uint16{SmsgQuestgiverOfferReward, SmsgQuestgiverRequestItems}, timeout)
+	if err != nil {
+		return out, fmt.Errorf("wow: complete quest %d: %w", questID, err)
+	}
+
+	out.QuestID, out.AnsweredWith = questID, opcode
+	switch opcode {
+	case SmsgQuestgiverOfferReward:
+		offer, parseErr := packet.ParseQuestGiverOfferReward(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Ready, out.Title, out.Text, out.Choices = true, offer.Title, offer.RewardText, len(offer.Choices)
+
+	case SmsgQuestgiverRequestItems:
+		items, parseErr := packet.ParseQuestGiverRequestItems(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Title, out.Text = items.Title, items.RequestText
+
+	default:
+		// Do only returns a listed opcode, so this is unreachable; saying so beats
+		// silently reporting a half-filled struct.
+		return out, fmt.Errorf("wow: complete quest %d: unexpected reply %s", questID, OpcodeName(opcode))
+	}
+	return out, nil
+}
+
+// RequestReward asks for the reward dialog of a quest whose items are in hand.
+//
+// It is the missing half of the hand-in for a quest that requires items: sending
+// CMSG_QUESTGIVER_COMPLETE_QUEST for such a quest answers with SMSG_QUESTGIVER_REQUEST_ITEMS
+// even when the player has everything (QuestHandler.cpp:517-518 routes on
+// `quest->GetReqItemsCount()`), and the client's "Complete Quest" button sends *this*
+// packet, which answers with SMSG_QUESTGIVER_OFFER_REWARD (QuestHandler.cpp:355-379).
+//
+// The handler returns silently when the quest is not complete, so a caller should only
+// ask after the quest log says the objectives are done; the timeout then means "the
+// server did not consider it finished".
+func (s *Session) RequestReward(ctx context.Context, npcGUID uint64, questID uint32, timeout time.Duration) (QuestTurnIn, error) {
+	var out QuestTurnIn
+	if npcGUID == 0 || questID == 0 {
+		return out, errors.New("wow: request reward: guid and quest id are required")
+	}
+	if timeout <= 0 {
+		timeout = DefaultQuestTimeout
+	}
+
+	opcode, data, err := s.Do(ctx, CmsgQuestgiverRequestReward,
+		packet.EncodeQuestgiverRequestReward(npcGUID, questID),
+		[]uint16{SmsgQuestgiverOfferReward, SmsgQuestgiverRequestItems}, timeout)
+	if err != nil {
+		return out, fmt.Errorf("wow: request reward for quest %d: %w", questID, err)
+	}
+
+	out.QuestID, out.AnsweredWith = questID, opcode
+	switch opcode {
+	case SmsgQuestgiverOfferReward:
+		offer, parseErr := packet.ParseQuestGiverOfferReward(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Ready, out.Title, out.Text, out.Choices = true, offer.Title, offer.RewardText, len(offer.Choices)
+
+	case SmsgQuestgiverRequestItems:
+		items, parseErr := packet.ParseQuestGiverRequestItems(data)
+		if parseErr != nil {
+			return out, parseErr
+		}
+		out.Title, out.Text = items.Title, items.RequestText
+
+	default:
+		return out, fmt.Errorf("wow: request reward for quest %d: unexpected reply %s",
+			questID, OpcodeName(opcode))
+	}
+	return out, nil
+}
+
+// ChooseReward takes one of the offered rewards.
+//
+// Two confirmations are required, and both are real signals: SMSG_QUESTGIVER_QUEST_COMPLETE
+// carries what was granted (QuestPackets.cpp:27-37), and the quest leaving the quest log
+// is the state change a client shows. Waiting for the log too means a reward that the
+// server silently refused is not reported as taken.
+//
+// reward is the index into the offer's choice list (0 when there is no choice), and
+// AzerothCore rejects anything from QUEST_REWARD_CHOICES_COUNT (6) up
+// (QuestHandler.cpp:255-263).
+func (s *Session) ChooseReward(ctx context.Context, npcGUID uint64, questID, reward uint32, timeout time.Duration) (packet.QuestReward, error) {
+	var out packet.QuestReward
+	if npcGUID == 0 || questID == 0 {
+		return out, errors.New("wow: choose reward: guid and quest id are required")
+	}
+	if timeout <= 0 {
+		timeout = DefaultQuestTimeout
+	}
+
+	opcode, data, err := s.Do(ctx, CmsgQuestgiverChooseReward,
+		packet.EncodeQuestgiverChooseReward(npcGUID, questID, reward),
+		[]uint16{SmsgQuestgiverQuestComplete}, timeout)
+	if err != nil {
+		return out, fmt.Errorf("wow: choose reward for quest %d: %w", questID, err)
+	}
+	if opcode != SmsgQuestgiverQuestComplete {
+		return out, fmt.Errorf("wow: choose reward for quest %d: unexpected reply %s",
+			questID, OpcodeName(opcode))
+	}
+
+	if out, err = packet.ParseQuestGiverQuestComplete(data); err != nil {
+		return out, err
+	}
+	if out.QuestID != questID {
+		return out, fmt.Errorf("wow: choose reward: the confirmation is for quest %d, asked about %d",
+			out.QuestID, questID)
+	}
+
+	if err := s.WaitFor(ctx, timeout, fmt.Sprintf("quest %d to leave the quest log", questID),
+		func() bool { return !state.Read(s).HasQuest(questID) }); err != nil {
+		return out, fmt.Errorf("wow: choose reward for quest %d: %w", questID, err)
+	}
+	return out, nil
+}
+
 // It is a convenience for callers that would otherwise import internal/wow/state just
 // to ask "which quests am I on".
 func (s *Session) QuestLog() []state.QuestSlot { return state.Read(s).Quests }
@@ -240,22 +406,6 @@ func (s *Session) QuestLog() []state.QuestSlot { return state.Read(s).Quests }
 // parses yet.
 func (s *Session) QueryQuestDefinition(questID uint32) error {
 	return s.Send(CmsgQuestQuery, packet.EncodeQuestQuery(questID))
-}
-
-// CompleteQuest sends CMSG_QUESTGIVER_COMPLETE_QUEST, which asks the giver to
-// validate the finished objectives. Depending on the quest the server answers
-// with SMSG_QUESTGIVER_REQUEST_ITEMS or SMSG_QUESTGIVER_OFFER_REWARD.
-func (s *Session) CompleteQuest(npcGUID uint64, questID uint32) error {
-	return s.Send(CmsgQuestgiverCompleteQuest, packet.EncodeQuestgiverCompleteQuest(npcGUID, questID))
-}
-
-// ChooseQuestReward sends CMSG_QUESTGIVER_CHOOSE_REWARD. reward may be 0 when
-// the quest offers no choice.
-//
-// AzerothCore rejects this if the quest is not in the reward-offer state, so it
-// must only be sent after SMSG_QUESTGIVER_OFFER_REWARD.
-func (s *Session) ChooseQuestReward(npcGUID uint64, questID uint32, reward uint32) error {
-	return s.Send(CmsgQuestgiverChooseReward, packet.EncodeQuestgiverChooseReward(npcGUID, questID, reward))
 }
 
 // QueryQuestgiverStatusMultiple sends CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY,

@@ -38,6 +38,8 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		"任务发布者的 creature entry；0 = 自动挑附近任意有任务的 NPC")
 	untilQuest := fs.Uint("until-quest", 0,
 		"把该任务接进任务日志后自动优雅退出（需要 --features quest）")
+	untilReward := fs.Uint("until-reward", 0,
+		"该任务交付完成（离开任务日志）后自动优雅退出（需要 --features quest）")
 	runFor := fs.Duration("for", 0, "最多运行多久后优雅退出（0 = 一直跑，直到 Ctrl-C）")
 	untilTimeout := fs.Duration("until-timeout", 5*time.Minute, "等 --until-arrival / --until-quest 的上限")
 	if err := fs.Parse(args); err != nil {
@@ -72,11 +74,17 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		return fmt.Errorf("autobot: travel is enabled but data_dir is empty; " +
 			"set it in the profile or AUTOBOT_DATA_DIR (maps/, mmaps/ and vmaps/ live there)")
 	}
-	if (*untilQuest != 0 || *questGiver != 0) && !specFeatures.Quest {
-		return fmt.Errorf("autobot: --until-quest and --quest-giver need --features quest")
+	if (*untilQuest != 0 || *questGiver != 0 || *untilReward != 0) && !specFeatures.Quest {
+		return fmt.Errorf("autobot: --until-quest, --until-reward and --quest-giver need --features quest")
 	}
-	if *untilArrival && *untilQuest != 0 {
-		return fmt.Errorf("autobot: --until-arrival and --until-quest cannot both stop the run")
+	stops := 0
+	for _, set := range []bool{*untilArrival, *untilQuest != 0, *untilReward != 0} {
+		if set {
+			stops++
+		}
+	}
+	if stops > 1 {
+		return fmt.Errorf("autobot: --until-arrival, --until-quest and --until-reward stop the run, so pick one")
 	}
 
 	spec := bot.Spec{
@@ -155,7 +163,7 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		playCtx, cancel = context.WithTimeout(ctx, *runFor)
 		defer cancel()
 	}
-	if *untilArrival || *untilQuest != 0 {
+	if *untilArrival || *untilQuest != 0 || *untilReward != 0 {
 		var cancel context.CancelFunc
 		playCtx, cancel = context.WithCancel(playCtx)
 		defer cancel()
@@ -164,6 +172,9 @@ func runRun(args []string, logger *slog.Logger) (err error) {
 		}
 		if *untilQuest != 0 {
 			go waitForQuest(playCtx, cancel, runner.Session(), uint32(*untilQuest), *untilTimeout, logger)
+		}
+		if *untilReward != 0 {
+			go waitForReward(playCtx, cancel, runner.Session(), uint32(*untilReward), *untilTimeout, logger)
 		}
 	}
 
@@ -274,6 +285,61 @@ func waitForQuest(ctx context.Context, cancel context.CancelFunc, sess *wow.Sess
 					cancel()
 					return
 				}
+			}
+		}
+	}
+}
+
+// waitForReward ends the run once a quest has been handed in and rewarded.
+//
+// It waits for two things in order, because either alone is ambiguous: the quest has to
+// be in the log first (a player who never took it cannot hand it in), and then it has to
+// leave — which is what the server does when it grants the reward (choose-reward clears
+// the slot). Waiting only for "not in the log" would stop immediately on a bot that never
+// accepted anything.
+func waitForReward(ctx context.Context, cancel context.CancelFunc, sess *wow.Session,
+	questID uint32, timeout time.Duration, logger *slog.Logger) {
+
+	if sess == nil {
+		return
+	}
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	seen := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			logger.Warn("run: the quest was never rewarded in time",
+				"quest", questID, "seen_in_log", seen, "timeout", timeout.String())
+			cancel()
+			return
+		case <-ticker.C:
+			has := false
+			for _, slot := range sess.QuestLog() {
+				if slot.QuestID == questID {
+					has = true
+					if !seen {
+						logger.Info("run: quest is in the log, waiting for the hand-in",
+							"quest", questID, "slot", slot.Index, "state", slot.State)
+					}
+					break
+				}
+			}
+
+			if has {
+				seen = true
+				continue
+			}
+			if seen {
+				logger.Info("run: quest left the log after being handed in, stopping", "quest", questID)
+				cancel()
+				return
 			}
 		}
 	}
