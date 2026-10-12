@@ -327,6 +327,14 @@ func TestValidate(t *testing.T) {
 			wantErr: ErrInvalidProfile,
 		},
 		{
+			// Observed live: the server refuses this with CHAR_CREATE_ERROR and
+			// "invalid race/class pair (1/3)" in its log. Human hunters only
+			// became possible in Cataclysm, not in 3.3.5a.
+			name:    "race and class that 3.3.5a does not combine",
+			mutate:  func(c *Config) { c.Character.Race, c.Character.Class = 1, 3 },
+			wantErr: ErrInvalidProfile,
+		},
+		{
 			name:    "gender out of range",
 			mutate:  func(c *Config) { c.Character.Gender = 2 },
 			wantErr: ErrInvalidProfile,

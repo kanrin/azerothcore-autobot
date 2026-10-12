@@ -277,6 +277,9 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("%w: character.class %d is not a 3.3.5a class",
 			ErrInvalidProfile, c.Character.Class))
 	}
+	if err := checkRaceClass(c.Character.Race, c.Character.Class); err != nil {
+		errs = append(errs, err)
+	}
 	if c.Character.Gender > 1 {
 		errs = append(errs, fmt.Errorf("%w: character.gender %d must be 0 (male) or 1 (female)",
 			ErrInvalidProfile, c.Character.Gender))
@@ -321,6 +324,57 @@ var (
 		1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true, 9: true, 11: true,
 	}
 )
+
+// raceClasses lists the classes AzerothCore will create for each race. The
+// range checks above cannot catch a pair the server rejects, which is not
+// hypothetical: a human hunter passes both checks, and the server answers with
+// CHAR_CREATE_ERROR plus
+//
+//	Player::Create: Possible hacking-attempt: ... invalid race/class pair (1/3)
+//
+// Human hunters only exist from Cataclysm on.
+//
+// Source: the server's own acore_world.playercreateinfo table, which is what
+// Player::Create consults. Re-derive it with
+//
+//	docker exec ac-database mysql -uroot -ppassword -N -e \
+//	  'SELECT race, GROUP_CONCAT(class ORDER BY class) FROM acore_world.playercreateinfo GROUP BY race'
+//
+// Class 6 (death knight) is listed for every race here, but a server additionally
+// requires a level 55 character on the account; that rule stays server-side and
+// the bot avoids death knights by default (see the project rules).
+var raceClasses = map[uint8][]uint8{
+	1:  {1, 2, 4, 5, 6, 8, 9}, // Human
+	2:  {1, 3, 4, 6, 7, 9},    // Orc
+	3:  {1, 2, 3, 4, 5, 6},    // Dwarf
+	4:  {1, 3, 4, 5, 6, 11},   // Night elf
+	5:  {1, 4, 5, 6, 8, 9},    // Undead
+	6:  {1, 3, 6, 7, 11},      // Tauren
+	7:  {1, 4, 6, 8, 9},       // Gnome
+	8:  {1, 3, 4, 5, 6, 7, 8}, // Troll
+	10: {2, 3, 4, 5, 6, 8, 9}, // Blood elf
+	11: {1, 2, 3, 5, 6, 7, 8}, // Draenei
+}
+
+// checkRaceClass reports whether the server can create this combination.
+//
+// It stays quiet when either value is zero or unknown: the range checks already
+// reported those, and reporting the same problem twice only makes the output
+// noisier. The message names the classes that do work, because the useful thing
+// to know when a combination is rejected is what to use instead.
+func checkRaceClass(race, class uint8) error {
+	classes, ok := raceClasses[race]
+	if !ok || class == 0 {
+		return nil
+	}
+	for _, allowed := range classes {
+		if allowed == class {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: a race %d character cannot be class %d; AzerothCore creates %v for that race",
+		ErrInvalidProfile, race, class, classes)
+}
 
 // envString returns the first environment value that is set and non-empty, or
 // the fallback when none is.
