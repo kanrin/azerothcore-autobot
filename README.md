@@ -12,7 +12,9 @@ Go 编写的**客户端侧（协议级）WoW 3.3.5a 自动玩家**。它不改�
 
 ## 状态
 
-**里程碑 1 的代码已完成；实盘验证卡在服务端的一个开关上（见「环境要求」第 2 条）。**
+**里程碑 1（登录 + 建号）与 1.5（自身状态模型）已在真实服务端通过验收。**
+环境侧的前置已全部满足：服务端 `Warden.Enabled = 0`、`realmlist.localAddress = 192.168.50.11`、
+客户端数据（`dbc` + `maps` + `mmaps` + `vmaps`，3.1 GB）已在本机 `ac-data/`（gitignore）。
 
 范围已按用户要求扩大（多 bot 编排、常驻 loop、任务/打怪/采集/组队副本/成就/AH/战场、阵营平衡）。
 当前落地顺序与范围收敛见本文末尾的「路线图」；首批只做 **2–3 个 bot 的 loop / 任务 / 采集**，
@@ -20,16 +22,16 @@ AH 经济、战场、成就按配置默认关闭，设计保留。
 
 | # | 里程碑 | 状态 |
 |---|--------|------|
-| 1 | 自动登录 + 建号 | ✅ 代码齐了：`internal/config`（profile + 环境变量 + flag 优先级）、`internal/wowdata`（幂等 provisioning + 清理）、`cmd/autobot`（`probe` / `login` / `state`）。实盘已跑到 auth 成功、拿到正确世界地址；**未完成**的是世界握手（被服务端 `AUTH_REJECT` 拒绝，原因已定位为 `Warden.Enabled`） |
-| 1.5 | 自身状态模型 | ✅ `internal/wow/state`：从对象缓存读金钱/背包/装备/银行/技能，字段偏移逐个钉到 `UpdateFields.h` 与 `Player.h` 的行号；`autobot state` 是它的实盘证据（待世界握手打通后跑） |
-| 1.6 | 目标调度器（agent） | ✅ `internal/agent`：200ms tick、黑板、行为注册表、优先级 + 抢占余量、失败指数退避、`Done`/`Stopper` 语义 |
-| 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（跨大陆飞行点未做） |
+| 1 | 自动登录 + 建号 | ✅ **实盘通过**：`probe` → `phase=authed`；`login` → `in world`（`health=55/55`）+ `database agrees` + `login: OK`；`TestSmokeLogin` 两次登录复用同一 guid；`TestCleanupRemovesBotData` 把角色与账号都清干净（DB 回到 0 行） |
+| 1.5 | 自身状态模型 | ✅ **实盘通过**：`autobot state` 与 DB 逐字段一致；`TestStateMatchesDatabase` 自动比对金钱、每个物品槽（entry/堆叠/耐久）与每个技能（人类战士：22 条技能、含 `backpack[0] ↔ bag0[23]` 的背包映射） |
+| 1.6 | 目标调度器（agent） | ✅ `internal/agent`：200ms tick、黑板、行为注册表、优先级 + 抢占余量、失败指数退避、`Done`/`Stopper` 语义（单测 `-race` 90.5%） |
+| 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（跨大陆飞行点未做；尚未实盘跑动） |
 | 2 | 任务进行 | 仅发送侧：`CMSG_QUEST_*` 与 gossip 编码 + `Session` 封装；**缺** SMSG 解析、任务日志、状态机 |
 | 3 | 组队接受 | 未开始（上游已有邀请/接受/转队长/解散接口，按规则复用而非重写） |
 | 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机。2–3 个 bot 凑不齐 5 人随机本，进本走"手工组队 + 走到副本门口"的回退路径并在日志标注 |
 | 5 | 副本内推进 | 未开始 |
 | 6 | 采集 / 卖垃圾 / 训练师 | 未开始（协议位置已定位：`CMSG_GAMEOBJ_USE`、剥皮法术、`CMSG_TRAINER_*`、`CMSG_LIST_INVENTORY`/`SELL_ITEM`） |
-| 7 | AH 经济 / 战场 / 成就 | 延后（服务端侧证据：`acore_characters.auctionhouse` 0 行、无 AH-bot 模块、`StartPlayerMoney=0`；WSG 需 5v5 即 10 个 bot；`achievement_dbc` 仅 3 行、依赖 `data_dir/dbc`） |
+| 7 | AH 经济 / 战场 / 成就 | 延后，但**数据侧已确认可行**：服务端 `data/dbc` 有 247 个文件，含 `Achievement.dbc`、`AuctionHouse.dbc`、`MailTemplate.dbc`（此前担心的 dbc 缺失不成立）。仍缺的是 10 个 bot 才能开打的战场人数与 AH-bot 经济来源（`StartPlayerMoney=0`） |
 
 ### 现在能跑什么
 
@@ -40,9 +42,11 @@ go test ./...                                     # 离线单测（实盘用例�
 # 连真服务端（先 set -a; source .env.local; set +a）
 go run ./cmd/autobot version
 go run ./cmd/autobot probe --account autobotprobe                        # 认证 + 世界连接，报告停在哪一步
-go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe
-go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe   # 打印金钱/背包/技能（--json 可选）
-go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 10m                 # 实盘：登录冒烟 + 清理
+go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe --race 1 --class 1
+go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --class 1   # --json 可选
+
+# 实盘套件：顺序有意义，zz_cleanup_test.go 必须最后跑（文件名决定顺序），跑完 DB 归零
+go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 ```
 
 协议正确性的证据在单测里：**编码用 golden bytes**（期望字节按 AC 源码手写，绝不从自己的编码器反推），
@@ -84,7 +88,13 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 10m                 # 实�
    世界地址，不是 `address` 列原样返回：本机实测原值 `localAddress = 127.0.0.1` 会让 authserver 把
    `127.0.0.1:8085` 发给客户端，世界连接必然打到自己。改成服务端 IP 后 ≤20s 生效，对同网段的真实客户端也正确。
    `probe` 会回显实际拿到的地址（`world_addr=`），一眼可辨。
-4. **寻路数据可用**（里程碑 2 起；登录/建号不需要）：`data_dir` 下 `maps/`、`mmaps/`、`vmaps/` 存在且非空。
+4. **寻路数据在服务端的 docker 卷里，本机需要一份副本**（里程碑 1 不需要，走路/打怪/采集需要）：
+   卷是 `azerothcore_ac-client-data`，容器内挂到 `/azerothcore/env/dist/data`（只读）。本机已拉好一份：
+   ```bash
+   ssh orz@192.168.50.11 'docker cp ac-worldserver:/azerothcore/env/dist/data /home/orz/ac-data-export'
+   rsync -a orz@192.168.50.11:/home/orz/ac-data-export/ ./ac-data/   # 3.1 GB / 22280 文件
+   ```
+   `ac-data/` 已在 `.gitignore` 里；`AUTOBOT_DATA_DIR` 指向它即可。
 5. **凭据与配置**：凭据只进 `.env.local`（gitignore），模板见 `.env.example`；profile 模板见
    `profiles/example.yml`（profile 里只写环境变量名，不写密码）。CLI 与 `-tags=e2e` 测试共用同一份环境变量：
    `AUTOBOT_*` 为本项目命名，`E2E_*`（上游同名）作为回退，另有 `E2E_WORLD_LOG=info|debug|trace|warn|error|silent`
@@ -234,7 +244,22 @@ require (
 10. **`SMSG_CHAR_DELETE` 上游有常量却没有解析**，删角色必须自己挂监听（本项目走 `Session.Do`）。而且 GUID
     不在服务端角色缓存里时 AC **静默返回、一个包都不发**，所以只会表现为超时，没有失败码可看。
 11. **AC 的 docker 镜像默认开着 Warden**（`worldserver.conf.dist` 里是 1，`entrypoint.sh` 只是把 `.dist` 复制成
-    `.conf`）。所以"服务端刚起好、代码也没问题"时登录仍会被拒，先查这一条。
+    `.conf`）。所以"服务端刚起好、代码也没问题"时登录仍会被拒，先查这一条。**本机已于 2026-10-12 关掉并重启验证**。
+12. **非 instant logout 有 20 秒倒计时**：AC 只在休息区/坐骑上/有权限时立即登出，否则
+    `WorldSession.h:547` 是 `curr_time >= _logout_time + 20`。所以等 `SMSG_LOGOUT_COMPLETE` 的超时必须 ≥30 秒
+    （上游自己的 harness 也用 30 秒）；15 秒会得到"看起来像服务端不响应"的超时。而且被拒时
+    （战斗中/下落中/决斗）服务端**只发** `SMSG_LOGOUT_RESPONSE` 且 reason≠0、**不发** COMPLETE ——
+    只等 COMPLETE 会把"被拒"误报成超时，所以两个包都要 Arm 并检查 reason。
+13. **`SMSG_LOGIN_VERIFY_WORLD` 不携带角色自身更新字段**：紧跟其后还有一条自身的
+    `SMSG_UPDATE_OBJECT`。在这一刻读 `Health()` 会得到 `0`（实盘见过 `health=0 max_health=0`），
+    `state` 快照也会是空的。`EnterWorld` 现在会等自身数据进缓存（`MaxHealth() > 0`）再返回。
+14. **race/class 组合必须合法**：人类猎人（1/3）在 3.3.5a 根本不存在（Cata 才加），服务端会给
+    `CHAR_CREATE_ERROR` 并在日志写 `invalid race/class pair (1/3)`；范围检查拦不住它。
+    `internal/config` 现在按服务端 `acore_world.playercreateinfo` 的矩阵做启动期守卫，
+    矩阵来源与重新生成方式写在 `config.go` 的注释里。
+15. **实盘用例的执行顺序是有意义的**：清理用例删的是别人建的角色与账号，所以它的文件名必须是
+    `zz_cleanup_test.go`（`go test` 按文件名排序执行），这样 `go test -tags=e2e ./test/e2e/...`
+    跑完整套后服务端 DB 回到 0 行。
 
 ## 边界（明确不做）
 
@@ -250,7 +275,7 @@ require (
 
 | 阶段 | 内容 | 验收 |
 |------|------|------|
-| **M0 前置（需要你操作）** | ① 服务端 `Warden.Enabled = 0` 并重启 worldserver；② 把客户端数据弄到本机：`dbc/`（小）+ `maps/`、`mmaps/`、`vmaps/`（约 3–6 GB），例如 `docker cp ac-worldserver:/azerothcore/env/dist/data/. ./ac-data/` | `probe` 打印 `phase=authed`；`login` 打印 `login: OK` + `login: database agrees`；`state` 打印的金钱/背包/技能与 `acore_characters`（`characters.money`、`item_instance`、`character_skills`）一致 |
+| **M0 前置** | ✅ 已完成：服务端 `Warden.Enabled = 0` + 重启、`realmlist.localAddress = 192.168.50.11`、客户端数据 3.1 GB 拉到本机 `ac-data/`、SSH 只读核查（`data/dbc` 247 个文件齐全） | `probe` → `phase=authed`；`login` → `login: OK` + `login: database agrees`；`state` 与 `acore_characters`（`money`、`item_instance`、`character_skills`）一致 —— **全部达成，见上方状态表** |
 | **M1 loop 骨架** | 剩余：`cmd/autobot run`（配置 → 登录 → agent 循环）、feature 与 config 的接线 | 单 bot 常驻：日志出现 `agent: running` 与行为切换；Ctrl-C 后 `agent: stopped` 且已登出 |
 | **M2 多 bot** | `internal/fleet`（roster 载入、登录节流、阵营平衡、批量 provisioning）、`fleet.yml` + `roster/*.yml`、`autobot fleet/provision/retire/gc/status` | 3 个 bot 同时常驻；重跑幂等（账号/角色数不变）；`status --faction` 偏差在容差内；`gc` 后 DB 归零 |
 | **M3 战斗 + 任务** | 职业战斗循环（目标选择/回血/复位）、任务子系统（gossip + `SMSG_QUESTGIVER_*`/`SMSG_QUESTUPDATE_*` 解析 + 任务日志状态机）、精选任务路径（如人类 1–20） | kill/collect/explore 三型任务各走完一条，`character_queststatus` 与预期一致 |
@@ -258,10 +283,11 @@ require (
 | **M5 LFG + 副本（受限）** | LFG 协议到 `proposal` 一级；进本走回退路径（手工组队 + 走到副本门口）；副本内推进 | 队长 `CMSG_LFG_JOIN` 后有 `JOIN_RESULT`/`QUEUE_STATUS`/`PROPOSAL_UPDATE` 证据包；回退路径：3 bot 进 Deadmines 并清掉前两组怪（日志标注走了回退） |
 | **backlog** | AH 出售/购买 + 邮件（2.7/2.8/2.9）、战场 + 简单 PvP（2.10，需 10 bot）、成就（2.4，依赖 `data_dir/dbc`）、飞行点（跨大陆）、`internal/telemetry` | 各自在满足前置后按同一 DoD 验收 |
 
-### 需要你决定/操作的三件事
+### 环境侧已就绪（无需再操作）
 
-1. **服务端 `Warden.Enabled = 0` 并重启**（命令见「环境要求」第 2 条）。在此之前所有实盘功能都只能停在 auth 成功。
-2. **客户端数据落到本机**（`data_dir`）。本机实测 `env/dist` 下只有 `etc/`、`logs/`，全盘没有 `mmaps` 目录；
-   没有它，寻路/打怪/采集/副本全部无法验证。
-3. 可选：授权我用 SSH（服务端 22 端口开着）做**只读**检查（`data_dir/dbc` 是否完整、conf、日志）——
-   一条 `ls /azerothcore/env/dist/data/dbc | wc -l` 就能判定成就/AH/邮件是否可用。
+1. ✅ 服务端 `Warden.Enabled = 0` 并已重启（`docker exec ac-worldserver grep -n Warden.Enabled ...` → `0`）。
+2. ✅ 客户端数据在本机 `ac-data/`（`dbc` 87 M、`maps` 295 M、`mmaps` 2.1 G、`vmaps` 657 M）。
+3. ✅ SSH 只读核查已完成；服务端导出目录（`/home/orz/ac-data-export`）已删除，未留残余。
+4. ✅ bot 账号与角色：实盘套件跑完自行清理，DB 现在是 0 账号 / 0 角色。
+
+下一步（不需要你做任何事）：把 `autobot run` 接起来，在 Elwynn 做第一次真实行走 + 采集。
