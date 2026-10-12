@@ -3,9 +3,87 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
+
+// TestTickCallsRefresh covers the per-tick hook: it has to run on every tick
+// before the behaviors are scored, and it has to see the tick counter already
+// advanced so a behavior can tell which tick it is looking at.
+func TestTickCallsRefresh(t *testing.T) {
+	now := time.Unix(2000, 0)
+	a := newTestAgent(t, &now, 25, newFake("idle", 0, nil))
+
+	var ticks []int64
+	a.opts.Refresh = func(_ context.Context, bb *Blackboard) {
+		ticks = append(ticks, bb.Tick())
+	}
+
+	for range 3 {
+		if _, err := a.Tick(context.Background()); err != nil {
+			t.Fatalf("Tick: %v", err)
+		}
+	}
+
+	if len(ticks) != 3 || ticks[0] != 1 || ticks[1] != 2 || ticks[2] != 3 {
+		t.Errorf("Refresh saw ticks %v, want [1 2 3]", ticks)
+	}
+}
+
+// TestTick_NoCandidateStopsTheRunningBehavior is the regression test for a panic
+// the live server found: a behavior that fails scores zero, so the next tick has
+// no candidate at all — and logging the switch indexed the behavior list with -1.
+func TestTick_NoCandidateStopsTheRunningBehavior(t *testing.T) {
+	now := time.Unix(1000, 0)
+	flaky := newFake("flaky", 50, nil)
+	flaky.outcome = func(*Blackboard) error { return errors.New("boom") }
+	a := newTestAgent(t, &now, 25, flaky)
+
+	if _, err := a.Tick(context.Background()); err == nil {
+		t.Fatal("the failing behavior reported no error")
+	}
+	// A failure does not unset the running behavior: it stays current and goes
+	// into backoff, which is why the next tick has a current behavior that scores
+	// zero. That combination is what used to index the list with -1.
+	if a.Current() == nil {
+		t.Fatal("a failing behavior must stay the current one until it is stopped")
+	}
+
+	if _, err := a.Tick(context.Background()); err != nil {
+		t.Fatalf("Tick with no candidate: %v", err)
+	}
+	if a.Current() != nil {
+		t.Errorf("Current = %v, want nil once the backoff put it out of the running", a.Current().Name())
+	}
+	if a.Blackboard().Phase() != PhaseIdle {
+		t.Errorf("phase = %s, want idle when nothing wants to run", a.Blackboard().Phase())
+	}
+}
+
+// TestTick_RecoversFromABehaviorPanic keeps one buggy behavior from killing a
+// whole fleet process: the panic becomes an error, the loop keeps running and the
+// behavior goes into backoff.
+func TestTick_RecoversFromABehaviorPanic(t *testing.T) {
+	now := time.Unix(1000, 0)
+	panicky := newFake("panicky", 50, nil)
+	panicky.outcome = func(*Blackboard) error { panic("index out of range") }
+	a := newTestAgent(t, &now, 25, panicky)
+
+	_, err := a.Tick(context.Background())
+	if err == nil {
+		t.Fatal("Tick returned nil after the behavior panicked")
+	}
+	if !strings.Contains(err.Error(), "panicked") {
+		t.Errorf("Tick error = %v, want it to say the behavior panicked", err)
+	}
+
+	// Backoff applies, so the next tick does not run it again — the process is
+	// alive and the bug is contained.
+	if _, err := a.Tick(context.Background()); err != nil {
+		t.Fatalf("the tick after a panic: %v", err)
+	}
+}
 
 func TestNewRegistry_RejectsBadBehaviors(t *testing.T) {
 	if _, err := NewRegistry(nil); err == nil {

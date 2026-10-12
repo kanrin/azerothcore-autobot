@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -73,6 +75,10 @@ func (a *Agent) Tick(ctx context.Context) (Behavior, error) {
 	now := a.opts.Clock()
 	a.bb.nextTick(now)
 
+	if a.opts.Refresh != nil {
+		a.opts.Refresh(ctx, a.bb)
+	}
+
 	behaviors := a.reg.Behaviors()
 	scores := make([]int, len(behaviors))
 	for i, b := range behaviors {
@@ -107,9 +113,18 @@ func (a *Agent) Tick(ctx context.Context) (Behavior, error) {
 
 	if currentIndex >= 0 && chosenIndex != currentIndex {
 		a.stopBehavior(ctx, behaviors[currentIndex])
-		a.opts.Logger.Info("agent: switching behavior", "bot", a.bot,
-			"from", behaviors[currentIndex].Name(), "from_score", currentScore,
-			"to", behaviors[chosenIndex].Name(), "to_score", bestScore)
+		if chosenIndex < 0 {
+			// The running behavior stopped being a candidate and nothing else wants
+			// to run: the bot goes idle. That is a normal state (it is what happens
+			// after a behavior returns Done), not a failure — and it must not be
+			// logged by indexing the behavior list with -1.
+			a.opts.Logger.Info("agent: no behavior wants to run", "bot", a.bot,
+				"stopped", behaviors[currentIndex].Name(), "stopped_score", currentScore)
+		} else {
+			a.opts.Logger.Info("agent: switching behavior", "bot", a.bot,
+				"from", behaviors[currentIndex].Name(), "from_score", currentScore,
+				"to", behaviors[chosenIndex].Name(), "to_score", bestScore)
+		}
 	}
 
 	if chosenIndex < 0 {
@@ -125,7 +140,7 @@ func (a *Agent) Tick(ctx context.Context) (Behavior, error) {
 	}
 	a.setCurrent(chosen.Name())
 
-	err := chosen.Run(ctx, a.bb)
+	err := a.callRun(ctx, chosen, a.bb)
 	switch {
 	case err == nil:
 		// Progress resets the failure counter: the backoff is about consecutive
@@ -142,4 +157,23 @@ func (a *Agent) Tick(ctx context.Context) (Behavior, error) {
 			"err", err.Error(), "retry_in", delay.String())
 		return chosen, err
 	}
+}
+
+// callRun runs one behavior and turns a panic inside it into an error.
+//
+// A resident bot runs for hours, and one buggy behavior must not take the whole
+// process down with it — in a fleet process that would stop every other bot too.
+// The panic is logged with its stack so the bug stays visible, and the behavior
+// then goes into backoff like any other failure.
+func (a *Agent) callRun(ctx context.Context, b Behavior, bb *Blackboard) (err error) {
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		a.opts.Logger.Error("agent: behavior panicked", "bot", a.bot, "behavior", b.Name(),
+			"panic", fmt.Sprint(recovered), "stack", string(debug.Stack()))
+		err = fmt.Errorf("agent: behavior %s panicked: %v", b.Name(), recovered)
+	}()
+	return b.Run(ctx, bb)
 }

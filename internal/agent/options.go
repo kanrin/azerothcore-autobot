@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"time"
@@ -70,6 +71,15 @@ type Options struct {
 	// Clock is the time source; nil means time.Now. Tests set it to drive the
 	// backoff without sleeping.
 	Clock func() time.Time
+
+	// Refresh runs at the top of every tick, before anything is scored.
+	//
+	// It is where the caller publishes what the behaviors read: the self state
+	// snapshot, the position, the keep-alive. Reading is cheap — the values come
+	// from the client's cached update fields, no packet is sent — and doing it
+	// once per tick is what keeps every behavior in a tick looking at the same
+	// world instead of each re-reading a slightly newer one.
+	Refresh func(ctx context.Context, bb *Blackboard)
 
 	// Logger receives behavior switches, failures and shutdown. Nil discards.
 	Logger *slog.Logger
