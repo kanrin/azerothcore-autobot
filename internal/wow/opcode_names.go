@@ -26,11 +26,14 @@ var opcodeNames = map[uint16]string{
 	SmsgQuestgiverRequestItems:  "SMSG_QUESTGIVER_REQUEST_ITEMS",
 	SmsgQuestgiverOfferReward:   "SMSG_QUESTGIVER_OFFER_REWARD",
 	CmsgQuestgiverChooseReward:  "CMSG_QUESTGIVER_CHOOSE_REWARD",
+	SmsgQuestgiverQuestInvalid:  "SMSG_QUESTGIVER_QUEST_INVALID",
 	SmsgQuestgiverQuestComplete: "SMSG_QUESTGIVER_QUEST_COMPLETE",
 
-	SmsgQuestupdateComplete: "SMSG_QUESTUPDATE_COMPLETE",
-	SmsgQuestupdateAddKill:  "SMSG_QUESTUPDATE_ADD_KILL",
-	SmsgQuestupdateAddItem:  "SMSG_QUESTUPDATE_ADD_ITEM",
+	SmsgQuestupdateFailed:      "SMSG_QUESTUPDATE_FAILED",
+	SmsgQuestupdateFailedTimer: "SMSG_QUESTUPDATE_FAILEDTIMER",
+	SmsgQuestupdateComplete:    "SMSG_QUESTUPDATE_COMPLETE",
+	SmsgQuestupdateAddKill:     "SMSG_QUESTUPDATE_ADD_KILL",
+	SmsgQuestupdateAddItem:     "SMSG_QUESTUPDATE_ADD_ITEM",
 
 	CmsgQuestgiverStatusMultipleQuery: "CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY",
 	SmsgQuestgiverStatusMultiple:      "SMSG_QUESTGIVER_STATUS_MULTIPLE",

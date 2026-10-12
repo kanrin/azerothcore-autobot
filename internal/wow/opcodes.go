@@ -50,12 +50,15 @@ const (
 	SmsgQuestgiverRequestItems  uint16 = 0x18B
 	SmsgQuestgiverOfferReward   uint16 = 0x18D
 	CmsgQuestgiverChooseReward  uint16 = 0x18E
+	SmsgQuestgiverQuestInvalid  uint16 = 0x18F
 	SmsgQuestgiverQuestComplete uint16 = 0x191
 
 	// Quest log updates pushed by the server.
-	SmsgQuestupdateComplete uint16 = 0x198
-	SmsgQuestupdateAddKill  uint16 = 0x199
-	SmsgQuestupdateAddItem  uint16 = 0x19A
+	SmsgQuestupdateFailed      uint16 = 0x196
+	SmsgQuestupdateFailedTimer uint16 = 0x197
+	SmsgQuestupdateComplete    uint16 = 0x198
+	SmsgQuestupdateAddKill     uint16 = 0x199
+	SmsgQuestupdateAddItem     uint16 = 0x19A
 
 	// Batch questgiver status query/response.
 	CmsgQuestgiverStatusMultipleQuery uint16 = 0x417
