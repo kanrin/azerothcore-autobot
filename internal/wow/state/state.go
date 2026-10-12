@@ -123,4 +123,8 @@ type Snapshot struct {
 	// Containers reports the backpack and the equipped bags only: the bank is
 	// not part of "can I keep looting".
 	Containers []ContainerInfo
+
+	// Quests is the quest log, read from the player's own update fields rather
+	// than from a packet — see questlog.go for why.
+	Quests []QuestSlot
 }

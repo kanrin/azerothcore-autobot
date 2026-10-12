@@ -17,6 +17,8 @@ func Read(src Source) Snapshot {
 
 	snap.Money = self.Value(playerFieldCoinage)
 
+	snap.Quests = readQuestLog(self)
+
 	// Equipment (0..18) and the equipped bags (19..22) share one GUID array.
 	for slot := uint8(0); slot < equipmentSlots; slot++ {
 		snap.addSlot(src, SlotRef{Container: ContainerEquipped, Slot: slot},

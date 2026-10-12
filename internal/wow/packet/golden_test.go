@@ -8,9 +8,12 @@ import (
 )
 
 // mustHex decodes a hex string transcribed by hand from the AzerothCore C++.
+//
+// All whitespace is stripped, so a literal can be indented inside a table without
+// the indentation becoming part of the expectation.
 func mustHex(t *testing.T, s string) []byte {
 	t.Helper()
-	b, err := hex.DecodeString(strings.ReplaceAll(strings.ReplaceAll(s, " ", ""), "\n", ""))
+	b, err := hex.DecodeString(strings.Join(strings.Fields(s), ""))
 	if err != nil {
 		t.Fatalf("bad hex in test expectation %q: %v", s, err)
 	}
