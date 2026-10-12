@@ -29,8 +29,12 @@ import (
 	"azerothcore-autobot/internal/wowdata"
 )
 
-// version is the CLI's own version, kept in sync with the project README.
-const version = "0.1.0"
+// version is the CLI's own version.
+//
+// It is a variable rather than a constant so the build can stamp it: the Makefile
+// passes `-X main.version=$(git describe ...)`, while a plain `go build` keeps this
+// default. That is why `make version` and `autobot version` print the same thing.
+var version = "0.1.0"
 
 func main() {
 	logger := newLogger()

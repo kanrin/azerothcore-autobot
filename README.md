@@ -38,39 +38,47 @@ AH 经济、战场、成就按配置默认关闭，设计保留。
 ### 现在能跑什么
 
 ```bash
-go build ./... && go vet ./... && gofmt -l .      # 三者都必须无输出
-go test ./...                                     # 离线单测（实盘用例按 build tag 跳过）
+# 构建：Makefile 是入口（括号里是等价的裸命令）
+make build             # 编译到 bin/autobot，版本戳取自 git describe（= go build -o bin/autobot ./cmd/autobot）
+make                   # 同上：build 是默认目标
+make check             # 门禁三连：gofmt + go vet + go test ./...（提交前跑这个）
+make e2e               # 实盘用例（自动 source .env.local；需要服务端在跑）
+make release-linux     # 静态 linux/amd64 单文件，scp 到服务端即可跑
+make help              # 全部目标
 
-# 连真服务端（先 set -a; source .env.local; set +a）
-go run ./cmd/autobot version
-go run ./cmd/autobot probe --account autobotprobe                        # 认证 + 世界连接，报告停在哪一步
-go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe --race 1 --class 1
-go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --class 1   # --json 可选
+# 下面用 bin/autobot（make build 的产物）；等价写法是 go run ./cmd/autobot ...
+# 注意：go run / go build 不注入版本戳，`autobot version` 会打印默认值 0.1.0；
+#       make build 会打印 git describe 的结果（当前是 commit 短 sha）。
+bin/autobot version
+bin/autobot probe --account autobotprobe                        # 认证 + 世界连接，报告停在哪一步
+bin/autobot login --account autobotprobe --char-name Autobotprobe --race 1 --class 1
+bin/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --class 1   # --json 可选
 
 # 常驻 loop（M1 收尾）：Ctrl-C 优雅退出，日志 agent: running / agent: stopped / bot: logged out
-go run ./cmd/autobot run --account autobotprobe --char-name Autobotprobe --race 1 --class 1
+bin/autobot run --account autobotprobe --char-name Autobotprobe --race 1 --class 1
 #   --features ""        不启用任何行为（只在线，用来验证 loop 与保活）
 #   --for 60s            跑满时长后自行优雅退出
 #   --goto 0:-8902.59,-162.61,82.02 --until-arrival   走到该点后退出（需要 mmap，见坑 16）
 
 # 多 bot 编排（M2）：roster 在 fleet.yml + roster/*.yml，模板见 fleet.example.yml
 cp fleet.example.yml fleet.yml && cp roster/example.yml roster/bots.yml
-go run ./cmd/autobot fleet status   --fleet fleet.example.yml            # 账户/角色/阵营/在线 + --json
-go run ./cmd/autobot fleet provision --fleet fleet.example.yml --characters   # 账号 + 协议建号（幂等）
-go run ./cmd/autobot fleet run      --fleet fleet.example.yml            # 全 roster 常驻，Ctrl-C 全部优雅登出
-go run ./cmd/autobot fleet gc       --fleet fleet.example.yml            # 删角色（协议）+ 删账号（幂等）
+bin/autobot fleet status   --fleet fleet.example.yml            # 账户/角色/阵营/在线 + --json
+bin/autobot fleet provision --fleet fleet.example.yml --characters   # 账号 + 协议建号（幂等）
+bin/autobot fleet run      --fleet fleet.example.yml            # 全 roster 常驻，Ctrl-C 全部优雅登出
+bin/autobot fleet gc       --fleet fleet.example.yml            # 删角色（协议）+ 删账号（幂等）
 
 # 账号 provisioning（只写 bot 命名空间；前缀是硬守卫）
-go run ./cmd/autobot account create --account autobotprobe --prefix autobot   # 密码取自 AUTOBOT_PASSWORD
-go run ./cmd/autobot account list --prefix autobot                          # 需要时 --json
-go run ./cmd/autobot account delete --account autobotprobe --prefix autobot  # 仍拥有角色时会拒绝
+bin/autobot account create --account autobotprobe --prefix autobot   # 密码取自 AUTOBOT_PASSWORD
+bin/autobot account list --prefix autobot                          # 需要时 --json
+bin/autobot account delete --account autobotprobe --prefix autobot  # 仍拥有角色时会拒绝
 
 # 别的命名空间：用 --prefix 显式声明，例如测试账号 zhl001 / 密码 zhl001
-go run ./cmd/autobot account create --account zhl001 --password zhl001 --prefix zhl
-go run ./cmd/autobot account list --prefix zhl
+bin/autobot account create --account zhl001 --password zhl001 --prefix zhl
+bin/autobot account list --prefix zhl
 
 # 实盘套件：顺序有意义，zz_cleanup_test.go 必须最后跑（文件名决定顺序），跑完 DB 归零
-go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
+make e2e                    # 自动 source .env.local，等价于下面这行
+go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 60m -parallel 1 -p 1
 ```
 
 ### 账号 provisioning 与 bot 命名空间

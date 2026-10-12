@@ -22,6 +22,9 @@
 ## 完成定义（DoD）
 
 - [ ] `gofmt -l .` 无输出，`go vet ./...`、`go build ./...`、`go test ./...` 通过。
+      这四件事可以一条 `make check` 跑完；实盘是 `make e2e`（自动 source `.env.local`）；
+      二进制是 `make build`（产出 `bin/autobot`，版本戳用 git describe 经 ldflags 注入，
+      而裸 `go build` 保留默认 0.1.0）。
 - [ ] 新增/修改的协议编解码有 golden bytes 单测。
 - [ ] 至少一条实盘用例（`-tags=e2e`）验证了该功能，且用的是等待器而非 sleep。
 - [ ] 证据可复现：给出运行命令 + 关键日志/DB 查询 + 结论。

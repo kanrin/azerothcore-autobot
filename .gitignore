@@ -22,3 +22,7 @@ roster/*.local.yml
 
 # Client data pulled from the server (dbc/maps/mmaps/vmaps, about 3 GB).
 ac-data/
+
+# Build output (make build / make release).
+/bin/
+/dist/
