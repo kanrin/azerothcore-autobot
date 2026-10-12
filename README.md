@@ -92,7 +92,8 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 60m -parallel 1 -p 1
 - **幂等**：已存在则刷新密码（`password refreshed`），不会插出第二行；`delete` 删两次也不报错。
 - **只碰自己创建的**：`delete` 在账号仍拥有角色时拒绝执行（先删角色，而删角色走协议、不直接改库）。
 
-密码来源优先级：`--password` > `account.password_env` 指定的变量 > `AUTOBOT_PASSWORD`。
+密码来源优先级：`--password` > `account.password_env` 指定的变量 > `AUTOBOT_PASSWORD` > 内置默认 `botbot`
+（`config.DefaultPassword`：让本地栈开箱可用；它只有在登录你自己的服务器时才是安全的，公网服务器上必须用环境变量覆盖）。
 写在命令行会留在 shell history 里，长期使用建议放环境变量或 profile。
 
 协议正确性的证据在单测里：**编码用 golden bytes**（期望字节按 AC 源码手写，绝不从自己的编码器反推），

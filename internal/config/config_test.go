@@ -247,10 +247,19 @@ account:
 		if !errors.Is(err, ErrMissingSecret) {
 			t.Fatalf("ResolveSecrets error = %v, want ErrMissingSecret", err)
 		}
-		for _, want := range []string{"PROFILE_PASSWORD", "AUTOBOT_AUTH_DSN", "E2E_AUTH_DSN", "AUTOBOT_WORLD_DSN", "E2E_WORLD_DSN"} {
+		// The password has a documented default, so it is not among the reported
+		// names; the DSNs have none and are listed with every spelling.
+		for _, want := range []string{"AUTOBOT_AUTH_DSN", "E2E_AUTH_DSN", "AUTOBOT_WORLD_DSN", "E2E_WORLD_DSN"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("error %q does not mention %s", err, want)
 			}
+		}
+		if strings.Contains(err.Error(), "password") {
+			t.Errorf("error %q reports the password, which has a default and cannot be missing", err)
+		}
+		if cfg.Account.Password != DefaultPassword {
+			t.Errorf("Password = %q, want the default %q even when the DSNs are missing",
+				cfg.Account.Password, DefaultPassword)
 		}
 		if strings.Contains(err.Error(), "AUTOBOT_CHAR_DSN") {
 			t.Errorf("error %q reports a variable that was set", err)
@@ -295,11 +304,38 @@ func TestResolveSecretsCanBeSplit(t *testing.T) {
 		}
 	})
 
-	t.Run("a missing password is still an error", func(t *testing.T) {
+	t.Run("a missing password falls back to the default", func(t *testing.T) {
 		cfg := Default()
-		err := cfg.ResolvePasswordSecret(dsnOnly)
-		if !errors.Is(err, ErrMissingSecret) {
-			t.Fatalf("ResolvePasswordSecret without a password in the environment = %v, want ErrMissingSecret", err)
+		if err := cfg.ResolvePasswordSecret(dsnOnly); err != nil {
+			t.Fatalf("ResolvePasswordSecret without a password in the environment: %v", err)
+		}
+		if cfg.Account.Password != DefaultPassword {
+			t.Errorf("Password = %q, want the built-in default %q", cfg.Account.Password, DefaultPassword)
+		}
+		if DefaultPassword != "botbot" {
+			t.Errorf("DefaultPassword = %q, want botbot: the README and .env.example name it", DefaultPassword)
+		}
+	})
+
+	t.Run("the profile's variable wins over the default", func(t *testing.T) {
+		cfg := Default()
+		cfg.Account.PasswordEnv = "PROFILE_PASSWORD"
+		if err := cfg.ResolvePasswordSecret(envOf(map[string]string{
+			"PROFILE_PASSWORD": "from-profile",
+			"AUTOBOT_PASSWORD": "from-project",
+		})); err != nil {
+			t.Fatalf("ResolvePasswordSecret: %v", err)
+		}
+		if cfg.Account.Password != "from-profile" {
+			t.Errorf("Password = %q, want the profile's variable first", cfg.Account.Password)
+		}
+
+		// And the project's own name wins over the built-in default.
+		if err := cfg.ResolvePasswordSecret(envOf(map[string]string{"AUTOBOT_PASSWORD": "from-project"})); err != nil {
+			t.Fatalf("ResolvePasswordSecret: %v", err)
+		}
+		if cfg.Account.Password != "from-project" {
+			t.Errorf("Password = %q, want AUTOBOT_PASSWORD to win over the default", cfg.Account.Password)
 		}
 	})
 }

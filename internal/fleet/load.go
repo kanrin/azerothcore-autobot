@@ -299,11 +299,14 @@ func firstEnv(lookup func(string) (string, bool), names ...string) (string, bool
 	return "", false
 }
 
-// Password reads the accounts' password from the environment.
+// Password reads the accounts' password from the environment, falling back to
+// config.DefaultPassword when the variable is not set.
 //
 // It is a separate step from Load because a roster may be read for `status` or
 // `gc`, neither of which needs a password: making "which bots exist" depend on a
-// secret would be an obstacle with no benefit.
+// secret would be an obstacle with no benefit. The fallback is config's, not a
+// second copy of it, so the CLI and the fleet can never disagree about what the
+// default password is.
 func (f *Fleet) Password(lookup func(string) (string, bool)) (string, error) {
 	env := f.Policy.PasswordEnv
 	if env == "" {
@@ -312,6 +315,5 @@ func (f *Fleet) Password(lookup func(string) (string, bool)) (string, error) {
 	if v, ok := lookup(env); ok && v != "" {
 		return v, nil
 	}
-	return "", fmt.Errorf("fleet: no password: set %s in the environment "+
-		"(fleet.yml names the variable, it never holds the value)", env)
+	return config.DefaultPassword, nil
 }

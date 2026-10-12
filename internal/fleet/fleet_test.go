@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"azerothcore-autobot/internal/config"
 )
 
 // writeFleet lays out a fleet.yml and its roster in a temp dir and returns the
@@ -393,7 +395,8 @@ func TestFeaturesFor(t *testing.T) {
 	}
 }
 
-// TestPassword reads the variable the policy names and refuses to invent one.
+// TestPassword reads the variable the policy names and falls back to the project's
+// default, which is what lets a local fleet run without exporting anything.
 func TestPassword(t *testing.T) {
 	env := map[string]string{"AUTOBOT_PASSWORD": "s3cret", "OTHER_PASSWORD": "other"}
 	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
@@ -407,14 +410,18 @@ func TestPassword(t *testing.T) {
 		t.Errorf("Password = %q, want the variable the policy names", got)
 	}
 
+	// An unset variable is not an error: the default is documented, and a local
+	// fleet that has to export a variable before it can provision is a puzzle.
 	f.Policy.PasswordEnv = "MISSING"
-	if _, err := f.Password(lookup); err == nil {
-		t.Error("Password with an unset variable = nil, want an error naming the variable")
-	} else if !strings.Contains(err.Error(), "MISSING") {
-		t.Errorf("error = %v, want it to name the variable", err)
+	got, err = f.Password(lookup)
+	if err != nil {
+		t.Fatalf("Password with an unset variable: %v", err)
+	}
+	if got != config.DefaultPassword {
+		t.Errorf("Password with an unset variable = %q, want the default %q", got, config.DefaultPassword)
 	}
 
-	// An empty policy value falls back to the project default.
+	// An empty policy value falls back to the project default variable name.
 	f.Policy.PasswordEnv = ""
 	if got, err := f.Password(lookup); err != nil || got != "s3cret" {
 		t.Errorf("Password with no configured variable = %q/%v, want AUTOBOT_PASSWORD", got, err)

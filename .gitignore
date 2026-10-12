@@ -12,6 +12,7 @@ profiles/*.local.yml
 fleet.yml
 fleet.local.yml
 roster/*.local.yml
+roster-local/
 
 # Secrets.
 .env

@@ -34,7 +34,7 @@ fleet 子命令（多 bot 编排，roster 见 fleet.example.yml + roster/*.yml�
   autobot account list   [--prefix P] [--json]
   autobot account delete --account NAME [--prefix P]
 
-  密码优先取 --password；没有则从 AUTOBOT_PASSWORD（或 profile 的 account.password_env）读。
+  密码优先取 --password；没有则从 AUTOBOT_PASSWORD（或 profile 的 account.password_env）读；都没有时用内置默认 botbot。
   写在命令行会留在 shell history 里，长期使用建议放环境变量或 profile。
   前缀是 bot 命名空间的守卫：账号与角色名都必须以前缀开头，越界会被拒绝。
   默认前缀 autobot（profile 的 account.prefix / AUTOBOT_ACCOUNT_PREFIX）；

@@ -41,8 +41,8 @@ func runAccountCreate(args []string, logger *slog.Logger) error {
 	fs.SetOutput(os.Stderr)
 	base := newBaseFlags(fs)
 	password := fs.String("password", "",
-		"账号密码；不给则从 AUTOBOT_PASSWORD（或 profile 的 account.password_env）读取。"+
-			"写在命令行会留在 shell history 里")
+		"账号密码；不给则从 AUTOBOT_PASSWORD（或 profile 的 account.password_env）读取，"+
+			"都没有时用内置默认 botbot。写在命令行会留在 shell history 里")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

@@ -194,6 +194,19 @@ func (c *Config) applyEnv(lookup envLookup) error {
 	return err
 }
 
+// DefaultPassword is the password bot accounts get when nothing else provides one.
+//
+// It exists so a local stack works out of the box: every account this project
+// creates only ever logs into the operator's own server, and the alternative —
+// refusing to start until a variable is exported — makes the first run a puzzle.
+//
+// It is the last step of the precedence: --password, then the profile's
+// account.password_env, then AUTOBOT_PASSWORD, and only then this. It is not a
+// secret worth keeping — anyone who can reach the authserver of a server set up
+// this way knows it — so it must never be relied on where strangers can reach the
+// authserver.
+const DefaultPassword = "botbot"
+
 // ResolveSecrets fills the password and the three DSNs from the environment.
 //
 // Per value it tries the variable named by the profile first, then this
@@ -203,15 +216,16 @@ func (c *Config) ResolveSecrets(lookup envLookup) error {
 	return errors.Join(c.ResolvePasswordSecret(lookup), c.ResolveDatabaseSecrets(lookup))
 }
 
-// ResolvePasswordSecret fills the account password from the environment.
+// ResolvePasswordSecret fills the account password from the environment, and
+// falls back to DefaultPassword when nothing is set.
 //
 // It is separate from the DSNs because not every command needs a password:
 // provisioning can take one from --password, and listing or deleting accounts
 // needs none at all. Making "which accounts exist" depend on a secret would be
 // an obstacle with no benefit.
 func (c *Config) ResolvePasswordSecret(lookup envLookup) error {
-	return resolveSecret(lookup, "account password",
-		secretNames(c.Account.PasswordEnv, "AUTOBOT_PASSWORD"), &c.Account.Password)
+	return resolveSecretOrDefault(lookup,
+		secretNames(c.Account.PasswordEnv, "AUTOBOT_PASSWORD"), &c.Account.Password, DefaultPassword)
 }
 
 // ResolveDatabaseSecrets fills the three database DSNs from the environment.
@@ -244,6 +258,23 @@ func resolveSecret(lookup envLookup, what string, candidates []string, dst *stri
 		return nil
 	}
 	return fmt.Errorf("%w: set %s (the %s)", ErrMissingSecret, strings.Join(candidates, ", "), what)
+}
+
+// resolveSecretOrDefault reads the first candidate that is set and takes fallback
+// when none is.
+//
+// It never fails, so it has no "what" in its signature, unlike resolveSecret. It is
+// used for the bot account password, which has a documented default, and
+// deliberately not for the DSNs: a default DSN would silently connect somewhere
+// unexpected, while a default bot password only ever reaches this project's own
+// accounts.
+func resolveSecretOrDefault(lookup envLookup, candidates []string, dst *string, fallback string) error {
+	if v, ok := lookupFirst(lookup, candidates); ok {
+		*dst = v
+		return nil
+	}
+	*dst = fallback
+	return nil
 }
 
 // lookupFirst returns the first of names that is set to a non-empty value.

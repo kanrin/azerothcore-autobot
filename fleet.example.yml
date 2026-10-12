@@ -19,6 +19,7 @@ realm_index: 0
 data_dir: ""
 
 # Environment variable holding the accounts' password (never the password itself).
+# Unset means the built-in default "botbot" (config.DefaultPassword).
 password_env: "AUTOBOT_PASSWORD"
 
 # Where the per-bot files live, relative to this file.

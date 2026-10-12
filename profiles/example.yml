@@ -20,7 +20,9 @@ account:
   # refuse any name that does not carry it.
   prefix: "autobot"
   username: "autobot01"
-  # Name of the environment variable holding the password.
+  # Name of the environment variable holding the password. When it is not set the
+  # built-in default "botbot" applies (see config.DefaultPassword), so a local
+  # profile needs no secret at all.
   password_env: "AUTOBOT_PASSWORD"
 
 character:
