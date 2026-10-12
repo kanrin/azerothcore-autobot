@@ -6,6 +6,7 @@
 //	probe    authenticate, open the world socket and report where it stopped
 //	login    provision the account, log the character in, verify in the database
 //	state    log in and dump money, inventory and skills from the object cache
+//	account  create, list and delete accounts in the bot namespace
 //
 // Configuration precedence is flag > environment > profile > defaults; see
 // internal/config for the details. Secrets (account password, database DSNs) are
@@ -43,6 +44,8 @@ func main() {
 		err = runLogin(os.Args[2:], logger)
 	case "state":
 		err = runState(os.Args[2:], logger)
+	case "account":
+		err = runAccount(os.Args[2:], logger)
 	case "", "help", "-h", "--help":
 		usage(os.Stdout)
 		return
@@ -87,6 +90,7 @@ type baseFlags struct {
 	realmIndex int
 	account    string
 	charName   string
+	prefix     string
 	race       int
 	class      int
 	gender     int
@@ -101,6 +105,9 @@ func newBaseFlags(fs *flag.FlagSet) *baseFlags {
 	fs.StringVar(&f.authAddr, "auth-addr", "", "认证服务器 host:port，覆盖 profile 与环境变量")
 	fs.IntVar(&f.realmIndex, "realm", -1, "realm 索引，覆盖 profile")
 	fs.StringVar(&f.account, "account", "", "账号名（必须带 bot 前缀）")
+	fs.StringVar(&f.prefix, "prefix", "",
+		"bot 命名空间前缀，覆盖 profile 的 account.prefix 与 AUTOBOT_ACCOUNT_PREFIX；"+
+			"所有账号与角色名都必须以它开头")
 	fs.StringVar(&f.charName, "char-name", "", "角色名")
 	fs.IntVar(&f.race, "race", 0, "创建角色时的种族")
 	fs.IntVar(&f.class, "class", 0, "创建角色时的职业")
@@ -121,6 +128,9 @@ func (f *baseFlags) apply(cfg *config.Config) error {
 	}
 	if f.account != "" {
 		cfg.Account.Username = f.account
+	}
+	if f.prefix != "" {
+		cfg.Account.Prefix = f.prefix
 	}
 	if f.charName != "" {
 		cfg.Character.Name = f.charName

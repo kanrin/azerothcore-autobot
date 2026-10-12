@@ -9,7 +9,6 @@ import (
 
 	"azerothcore-autobot/internal/wow"
 	"azerothcore-autobot/internal/wow/state"
-	"azerothcore-autobot/internal/wowdata"
 
 	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
@@ -133,18 +132,7 @@ func TestStateMatchesDatabase(t *testing.T) {
 func ensureSmokeAccount(t *testing.T, ctx context.Context) {
 	t.Helper()
 
-	data, err := wowdata.Open(wowdata.Options{
-		AuthDSN:  e2eharness.AuthDSN,
-		CharDSN:  e2eharness.CharDSN,
-		WorldDSN: e2eharness.WorldDSN,
-		Prefix:   smokePrefix,
-		Logf:     t.Logf,
-	})
-	if err != nil {
-		t.Fatalf("precondition: open data layer: %v", err)
-	}
-	defer func() { _ = data.Close() }()
-
+	data := openData(t, smokePrefix)
 	if _, err := data.EnsureAccount(ctx, smokeAccount, smokePassword); err != nil {
 		t.Fatalf("precondition: provision account %s: %v", smokeAccount, err)
 	}

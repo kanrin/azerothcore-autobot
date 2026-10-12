@@ -45,9 +45,32 @@ go run ./cmd/autobot probe --account autobotprobe                        # 认�
 go run ./cmd/autobot login --account autobotprobe --char-name Autobotprobe --race 1 --class 1
 go run ./cmd/autobot state --account autobotprobe --char-name Autobotprobe --race 1 --class 1   # --json 可选
 
+# 账号 provisioning（只写 bot 命名空间；前缀是硬守卫）
+go run ./cmd/autobot account create --account autobotprobe --prefix autobot   # 密码取自 AUTOBOT_PASSWORD
+go run ./cmd/autobot account list --prefix autobot                          # 需要时 --json
+go run ./cmd/autobot account delete --account autobotprobe --prefix autobot  # 仍拥有角色时会拒绝
+
+# 别的命名空间：用 --prefix 显式声明，例如测试账号 zhl001 / 密码 zhl001
+go run ./cmd/autobot account create --account zhl001 --password zhl001 --prefix zhl
+go run ./cmd/autobot account list --prefix zhl
+
 # 实盘套件：顺序有意义，zz_cleanup_test.go 必须最后跑（文件名决定顺序），跑完 DB 归零
 go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 ```
+
+### 账号 provisioning 与 bot 命名空间
+
+`autobot account create|list|delete` 是唯一会写 `acore_auth` 的命令，三条性质是刻意的：
+
+- **前缀就是边界**：账号与角色名都必须以 `account.prefix`（默认 `autobot`）开头，否则**拒绝**而不是警告；
+  `list` 也按前缀过滤，所以这条命令永远看不到真实玩家的账号。前缀可用 `--prefix` 覆盖，
+  但"用别的前缀"不是"绕过检查"——它是在声明那批名字也归本项目所有。
+  正因如此，前缀必须是 ≥2 位的字母数字（`%` 或 `z` 这类会被拒绝：一个字符的前缀等于把半个服务器算成自己的）。
+- **幂等**：已存在则刷新密码（`password refreshed`），不会插出第二行；`delete` 删两次也不报错。
+- **只碰自己创建的**：`delete` 在账号仍拥有角色时拒绝执行（先删角色，而删角色走协议、不直接改库）。
+
+密码来源优先级：`--password` > `account.password_env` 指定的变量 > `AUTOBOT_PASSWORD`。
+写在命令行会留在 shell history 里，长期使用建议放环境变量或 profile。
 
 协议正确性的证据在单测里：**编码用 golden bytes**（期望字节按 AC 源码手写，绝不从自己的编码器反推），
 解码与状态机用表驱动。行为正确性的证据在 `test/e2e/`（`TestSmokeLogin`、`TestCleanupRemovesBotData`）。
@@ -56,13 +79,14 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 
 | 包 | 覆盖率 | 说明 |
 |----|--------|------|
-| `internal/config` | 99.0% | 优先级、严格 YAML、秘密解析、校验 |
-| `internal/wow/packet` | 94.7% | 字节级编解码，接近穷尽 |
+| `internal/config` | 99.1% | 优先级、严格 YAML、秘密解析（密码与 DSN 可分别解析）、校验 |
+| `internal/wow/packet` | 95.5% | 字节级编解码，接近穷尽 |
 | `internal/agent` | 90.5% | tick 选择、抢占余量、退避、`Done`/`Stopper`、黑板（`-race`） |
 | `internal/wow/state` | 86.8% | 更新字段读背包/技能/金钱；偏移按 AC 源码钉死 |
 | `internal/feature/travel` | 84.1% | 寻路状态机（到达/换图/重规划/卡住），planner 与 mover 都是接口 |
-| `internal/wow` | 44.3% | 未覆盖的基本都是必须真连服务端的分支（`Dial`/`Authenticate`/`EnterWorld`/quest/LFG 发送 helper），由 `-tags=e2e` 用例覆盖 |
-| `internal/wowdata` | 23.7% | 离线只够覆盖前缀守卫与结果投影；SQL 路径靠实盘用例 |
+| `internal/wow` | 42.3% | 未覆盖的基本都是必须真连服务端的分支（`Dial`/`Authenticate`/`EnterWorld`/`Logout` 的收发/quest/LFG 发送 helper），由 `-tags=e2e` 用例覆盖 |
+| `internal/wowdata` | 22.1% | 离线只覆盖前缀守卫、LIKE 转义与结果投影；SQL 路径（provisioning/列表/校验）靠实盘用例 |
+| `test/e2e` | — | 4 条实盘用例：`TestAccountLifecycle`、`TestSmokeLogin`、`TestStateMatchesDatabase`、`TestCleanupRemovesBotData` |
 
 ## 环境要求
 
@@ -107,7 +131,7 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 ## 代码结构
 
 ```
-cmd/autobot/             ✅  CLI：version / probe / login / state（run / fleet / cleanup 待补）
+cmd/autobot/             ✅  CLI：version / probe / login / state / account（run / fleet 待补）
 internal/
   agent/                 ✅  目标调度器：200ms tick + 黑板 + 行为注册表 + 抢占余量 + 失败退避
   feature/
