@@ -1,0 +1,44 @@
+# Example fleet: copy to fleet.yml (or point --fleet at this file) and edit.
+#
+# A fleet file describes bots; it never holds a secret. The accounts' password
+# comes from the environment variable named by password_env, and the database DSNs
+# come from the environment exactly as they do for a profile.
+#
+# The host is deliberately a default: AUTOBOT_AUTH_ADDR and AUTOBOT_DATA_DIR
+# override these two lines, so the same roster works from a laptop and from the
+# machine next to the server.
+
+# The bot namespace. Every account and character in the roster must start with it,
+# and nothing outside it is ever touched.
+prefix: autobot
+
+auth_addr: "127.0.0.1:3724"
+realm_index: 0
+
+# maps/, mmaps/ and vmaps/. Needed by the bots whose features include travel.
+data_dir: ""
+
+# Environment variable holding the accounts' password (never the password itself).
+password_env: "AUTOBOT_PASSWORD"
+
+# Where the per-bot files live, relative to this file.
+roster_dir: "roster"
+
+login:
+  # Pause between two bot logins. The authserver reads the logon proof on a single
+  # thread, so a burst of logons times out.
+  stagger: 2s
+  # How many logins may be in flight at once.
+  max_concurrent: 1
+  # How many times one bot is logged in before the fleet reports it as given up.
+  attempts: 3
+
+balance:
+  # Deviation is |alliance-horde|/total; 2/1 is 0.33 and 3/0 is 1.0. An odd number
+  # of bots cannot be split evenly, hence the tolerance.
+  enforce: false
+  tolerance: 0.34
+
+# What every bot does unless its roster entry overrides it.
+features:
+  travel: false

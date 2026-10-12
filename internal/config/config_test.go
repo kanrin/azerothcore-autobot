@@ -304,6 +304,28 @@ func TestResolveSecretsCanBeSplit(t *testing.T) {
 	})
 }
 
+// TestExportedGuards covers the two checks the fleet layer reuses: the prefix
+// rule and the race/class matrix. They are exported precisely so there is one
+// copy of each, which means they need to be tested through the exported door.
+func TestExportedGuards(t *testing.T) {
+	if err := ValidPrefix("autobot"); err != nil {
+		t.Errorf("ValidPrefix(autobot) = %v, want nil", err)
+	}
+	if err := ValidPrefix("z"); err == nil {
+		t.Error("ValidPrefix(z) = nil, want an error for a one-character namespace")
+	}
+	if err := ValidPrefix("au%"); err == nil {
+		t.Error("ValidPrefix(au%) = nil, want an error for a wildcard")
+	}
+
+	if !ValidRaceClass(1, 1) {
+		t.Error("ValidRaceClass(1, 1) = false, want true: human warrior exists")
+	}
+	if ValidRaceClass(1, 3) {
+		t.Error("ValidRaceClass(1, 3) = true, want false: there is no human hunter in 3.3.5a")
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -340,8 +362,7 @@ func TestValidate(t *testing.T) {
 			name:    "account prefix containing a wildcard",
 			mutate:  func(c *Config) { c.Account.Prefix = "au%" },
 			wantErr: ErrInvalidProfile,
-		},
-		{
+		}, {
 			name: "custom prefix with a matching account name",
 			mutate: func(c *Config) {
 				c.Account.Prefix = "zhl"

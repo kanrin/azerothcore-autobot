@@ -27,6 +27,7 @@ AH 经济、战场、成就按配置默认关闭，设计保留。
 | 1.6 | 目标调度器（agent） | ✅ `internal/agent`：200ms tick、黑板、行为注册表、优先级 + 抢占余量、失败指数退避、`Done`/`Stopper` 语义（单测 `-race` 90.5%） |
 | 1.7 | 走路式寻路 | ✅ `internal/feature/travel`：navmesh 规划 + 上游 `movement.MovementController` 每 tick 推进，含到达/换图/重规划/卡住判定（单测 84.1%）。**实盘走动被一个 mmap 版本差异挡住**，见下方坑 16 |
 | 1.8 | 常驻 loop（`autobot run`） | ✅ **实盘通过**：`internal/bot` 运行时（登录 → agent 每 200ms tick → 优雅登出）+ `autobot run`；实跑 119 tick 后 SIGINT → `agent: stopped` → `reason=signal` → `Logout complete`（约 19.7s 后 `SMSG_LOGOUT_COMPLETE`，正是 AC 的 20s 倒计时）→ DB `online=0`，无 ghost session；`TestRunResidentLoop` 自动复现同一结论 |
+| 2 | 多 bot 编排（fleet） | ✅ **实盘通过**：`internal/fleet`（fleet.yml + roster/*.yml、登录节流、阵营平衡、provision/status/gc、常驻监督器）+ `autobot fleet ...`；实测 **3 个 bot 同时在线 59s、`clean=3`、0 错误**，随后 3 个角色全部 `online=0` 并优雅登出；`provision` 重跑幂等（账号不重复创建）、`gc` 幂等（第二次全部 `absent`）；阵营 2 联盟/1 部落、偏差 0.33 在容差 0.34 内；`TestFleetLifecycle` 自动复现整条链 |
 | 2 | 任务进行 | 仅发送侧：`CMSG_QUEST_*` 与 gossip 编码 + `Session` 封装；**缺** SMSG 解析、任务日志、状态机 |
 | 3 | 组队接受 | 未开始（上游已有邀请/接受/转队长/解散接口，按规则复用而非重写） |
 | 4 | 自动寻找地下城 | 仅发送侧：`CMSG_LFG_JOIN/LEAVE/SET_ROLES/PROPOSAL_RESULT/BOOT_VOTE/TELEPORT/GET_STATUS` + slot 打包；**缺** SMSG 解析与排队状态机。2–3 个 bot 凑不齐 5 人随机本，进本走"手工组队 + 走到副本门口"的回退路径并在日志标注 |
@@ -51,6 +52,13 @@ go run ./cmd/autobot run --account autobotprobe --char-name Autobotprobe --race 
 #   --features ""        不启用任何行为（只在线，用来验证 loop 与保活）
 #   --for 60s            跑满时长后自行优雅退出
 #   --goto 0:-8902.59,-162.61,82.02 --until-arrival   走到该点后退出（需要 mmap，见坑 16）
+
+# 多 bot 编排（M2）：roster 在 fleet.yml + roster/*.yml，模板见 fleet.example.yml
+cp fleet.example.yml fleet.yml && cp roster/example.yml roster/bots.yml
+go run ./cmd/autobot fleet status   --fleet fleet.example.yml            # 账户/角色/阵营/在线 + --json
+go run ./cmd/autobot fleet provision --fleet fleet.example.yml --characters   # 账号 + 协议建号（幂等）
+go run ./cmd/autobot fleet run      --fleet fleet.example.yml            # 全 roster 常驻，Ctrl-C 全部优雅登出
+go run ./cmd/autobot fleet gc       --fleet fleet.example.yml            # 删角色（协议）+ 删账号（幂等）
 
 # 账号 provisioning（只写 bot 命名空间；前缀是硬守卫）
 go run ./cmd/autobot account create --account autobotprobe --prefix autobot   # 密码取自 AUTOBOT_PASSWORD
@@ -93,7 +101,9 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 | `internal/feature/travel` | 84.1% | 寻路状态机（到达/换图/重规划/卡住），planner 与 mover 都是接口 |
 | `internal/wow` | 42.3% | 未覆盖的基本都是必须真连服务端的分支（`Dial`/`Authenticate`/`EnterWorld`/`Logout` 的收发/quest/LFG 发送 helper），由 `-tags=e2e` 用例覆盖 |
 | `internal/wowdata` | 22.1% | 离线只覆盖前缀守卫、LIKE 转义与结果投影；SQL 路径（provisioning/列表/校验）靠实盘用例 |
-| `test/e2e` | — | 4 条实盘用例：`TestAccountLifecycle`、`TestSmokeLogin`、`TestStateMatchesDatabase`、`TestCleanupRemovesBotData` |
+| `internal/bot` | 51.0% | 离线覆盖行为适配（计划/到达/换图/放弃/抢占）、点解析、spec 校验；登录与循环靠实盘 |
+| `internal/fleet` | 39.1% | 离线覆盖 roster 加载/校验/默认值、阵营与偏差、环境覆盖；provision/status/gc/监督靠实盘 |
+| `test/e2e` | — | 5 条实盘用例：`TestAccountLifecycle`、`TestFleetLifecycle`、`TestRunResidentLoop`、`TestSmokeLogin`、`TestStateMatchesDatabase`、`TestCleanupRemovesBotData` |
 
 ## 环境要求
 
@@ -138,10 +148,11 @@ go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 15m
 ## 代码结构
 
 ```
-cmd/autobot/             ✅  CLI：version / probe / login / state / account / run（fleet 待补）
+cmd/autobot/             ✅  CLI：version / probe / login / state / account / run / fleet
 internal/
   agent/                 ✅  目标调度器：200ms tick + 黑板 + 行为注册表 + 抢占余量 + 失败退避 + panic 隔离
   bot/                   ✅  单 bot 运行时：登录 → agent 循环 → 保活（ping 30s/心跳 5s）→ 优雅登出；行为适配层
+  fleet/                 ✅  多 bot 编排：roster(YAML) + 登录节流 + 阵营平衡 + provision/status/gc + 常驻监督（失败重连）
   feature/
     travel/              ✅  走路式寻路（navmesh 规划 + 运动引擎每 tick 推进）；quest/grind/gather/... 待补
   config/                ✅  profile(YAML) + 环境变量 + flag 优先级；密码与 DSN 只从环境变量取
@@ -309,6 +320,17 @@ require (
 19. **一个行为 panic 不能带走整个进程**：`agent.Tick` 现在把行为里的 panic 转成错误并让该行为退避
     （同时打完整栈），因为 fleet 模式下多个 bot 共用一个进程。实盘第一次跑 `run` 时正是这里索引 `-1`
     崩掉了进程（见 `agent.go` 的 `callRun` 与 `TestTick_NoCandidateStopsTheRunningBehavior`）。
+20. **`SMSG_CHAR_DELETE` 的回答早于行的提交**：收到成功码后立刻 `DELETE FROM account` 会被
+    `wowdata` 以 `ErrAccountNotEmpty` 拒绝（它查得到刚"删掉"的角色）。实盘 `fleet gc` 的**第一个** bot
+    就是这么失败的，后面两个因为多了 2s 间隔反而成功——所以这是间歇性 bug 的典型形态。
+    正确做法是等真实信号：`fleet.GC` 现在轮询 `characters` 行直到消失（上限 timeout）再删账号。
+21. **角色名不能含数字**：AC 的角色名只允许字母（`ObjectMgr::CheckPlayerName`），所以"角色名带前缀"
+    这条约定在**前缀含数字**时无法字面成立（`autoe2e` + `alpha` → 数字被 `SanitizeName` 丢掉）。
+    fleet 的规则是：账号名带**完整前缀**，角色名带**前缀的字母部分**（`namePrefix()`，两种检查分开做）。
+22. **fleet 的策略也要认 `E2E_*` 回退**：`fleet.yml` 里的 `auth_addr` 只是占位，`AUTOBOT_AUTH_ADDR`
+    优先、`E2E_AUTH_ADDR` 兜底（与 profile 的优先级一致）。实盘第一次 `fleet provision --characters`
+    因为只认 `AUTOBOT_AUTH_ADDR` 而连 `127.0.0.1:3724` 失败——账号写成功了、建号全失败，正好把
+    "每一步都要有真实前置"这件事演示了一遍。
 
 ## 边界（明确不做）
 
@@ -326,7 +348,7 @@ require (
 |------|------|------|
 | **M0 前置** | ✅ 已完成：服务端 `Warden.Enabled = 0` + 重启、`realmlist.localAddress = 192.168.50.11`、客户端数据 3.1 GB 拉到本机 `ac-data/`、SSH 只读核查（`data/dbc` 247 个文件齐全） | `probe` → `phase=authed`；`login` → `login: OK` + `login: database agrees`；`state` 与 `acore_characters`（`money`、`item_instance`、`character_skills`）一致 —— **全部达成，见上方状态表** |
 | **M1 loop 骨架** | ✅ 已完成：`internal/bot`（可复用的单 bot 运行时）+ `autobot run`（常驻、保活、SIGINT/`--for`/`--until-arrival` 优雅退出）、travel 行为适配、`TestRunResidentLoop`。**遗留**：`--goto` 的实盘走动被 mmap 版本差异挡住（坑 16），解决后即可闭环 | 单 bot 常驻：日志出现 `agent: running`；Ctrl-C 后 `agent: stopped` + `bot: logged out` + DB `online=0` —— **已达成** |
-| **M2 多 bot** | `internal/fleet`（roster 载入、登录节流、阵营平衡、批量 provisioning）、`fleet.yml` + `roster/*.yml`、`autobot fleet/provision/retire/gc/status` | 3 个 bot 同时常驻；重跑幂等（账号/角色数不变）；`status --faction` 偏差在容差内；`gc` 后 DB 归零 |
+| **M2 多 bot** | ✅ 已完成：`internal/fleet`（`fleet.yml` + `roster/*.yml`、登录节流 `stagger`/`max_concurrent`、阵营平衡与容差、`Provision`/`Status`/`GC`、常驻监督器含失败重连）+ `autobot fleet status/provision/run/gc` + `fleet.example.yml`/`roster/example.yml` | 3 个 bot 同时常驻；重跑幂等（账号/角色数不变）；`status` 阵营偏差在容差内；`gc` 后 DB 归零 —— **全部达成**（见上方状态表第 2 行） |
 | **M3 战斗 + 任务** | 职业战斗循环（目标选择/回血/复位）、任务子系统（gossip + `SMSG_QUESTGIVER_*`/`SMSG_QUESTUPDATE_*` 解析 + 任务日志状态机）、精选任务路径（如人类 1–20） | kill/collect/explore 三型任务各走完一条，`character_queststatus` 与预期一致 |
 | **M4 采集 + 训练师 + 贩卖** | `CMSG_GAMEOBJ_USE`（矿/草）、剥皮法术（`SpellEffects.cpp:5138` 路径）、`CMSG_TRAINER_LIST`/`BUY_SPELL`、`CMSG_LIST_INVENTORY`/`SELL_ITEM`/`REPAIR_ITEM` | 学一门采集专业 → 采 5 个节点 → 回城卖垃圾：`Money()` 增加、`item_instance` 减行 |
 | **M5 LFG + 副本（受限）** | LFG 协议到 `proposal` 一级；进本走回退路径（手工组队 + 走到副本门口）；副本内推进 | 队长 `CMSG_LFG_JOIN` 后有 `JOIN_RESULT`/`QUEUE_STATUS`/`PROPOSAL_UPDATE` 证据包；回退路径：3 bot 进 Deadmines 并清掉前两组怪（日志标注走了回退） |

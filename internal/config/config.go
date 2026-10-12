@@ -307,6 +307,20 @@ func (c *Config) Validate() error {
 	return errors.Join(errs...)
 }
 
+// ValidPrefix reports whether a bot prefix can serve as a namespace guard.
+//
+// It is exported because the fleet keeps its own prefix in fleet.yml and has to
+// apply the same rule as a profile does — a second copy of this check is exactly
+// how the two drift apart.
+func ValidPrefix(prefix string) error { return checkPrefixShape(prefix) }
+
+// ValidRaceClass reports whether AzerothCore can create this race/class pair.
+//
+// The fleet roster needs the same guard a profile gets: "human hunter" does not
+// exist in 3.3.5a, and the server only says so at character creation, which is
+// too late to be a pleasant way to find out.
+func ValidRaceClass(race, class uint8) bool { return checkRaceClass(race, class) == nil }
+
 // checkPrefixShape keeps the bot prefix usable as a namespace guard.
 //
 // The prefix decides which accounts and characters this project may touch, so a

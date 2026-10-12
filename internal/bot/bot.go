@@ -184,6 +184,9 @@ func (r *Runner) Agent() *agent.Agent { return r.agent }
 // Character returns the logged-in character, or a zero value before Login.
 func (r *Runner) Character() wow.Character { return r.char }
 
+// CharacterCreated reports whether Login had to create the character.
+func (r *Runner) CharacterCreated() bool { return r.char.Created }
+
 // Blackboard returns the agent's blackboard, or nil before Login.
 func (r *Runner) Blackboard() *agent.Blackboard {
 	if r.agent == nil {

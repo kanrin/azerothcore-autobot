@@ -30,6 +30,11 @@ type Character struct {
 	Race  uint8
 	Class uint8
 	Level uint8
+
+	// Created reports whether EnterWorld had to create this character, rather
+	// than finding it on the account. Provisioning uses it to say what changed;
+	// it is never a reason to skip the login.
+	Created bool
 }
 
 // Appearance holds the cosmetic fields CMSG_CHAR_CREATE requires. The server
@@ -158,6 +163,10 @@ func (s *Session) EnterWorld(ctx context.Context, opt EnterWorldOptions) (Charac
 		if err != nil {
 			return Character{}, err
 		}
+		// Report that the row is new: a caller that provisions a roster needs to
+		// know whether it had to create anything, and re-deriving that from the
+		// database would be a second source of truth.
+		char.Created = true
 	}
 
 	// Race drives chat language selection; without it a Horde bot cannot speak

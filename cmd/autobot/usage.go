@@ -19,6 +19,12 @@ func usage(w io.Writer) {
   login                确保账号存在 → 建/选角色 → 进入世界 → 校验数据库 → 登出
   state                进入世界后打印自身状态（金钱/背包/技能），用于校验更新字段偏移
   run                  常驻：登录 → agent 循环 → Ctrl-C 优雅登出（可用 --goto 走一个点）
+
+fleet 子命令（多 bot 编排，roster 见 fleet.example.yml + roster/*.yml）:
+  autobot fleet status    [--fleet P] [--json]        账号/角色/阵营/在线状态 + 平衡判定
+  autobot fleet provision [--fleet P] [--characters]  批量开通账号（--characters 时用协议建号），幂等
+  autobot fleet run       [--fleet P] [--for D]       全 roster 常驻，Ctrl-C 后逐个优雅登出
+  autobot fleet gc        [--fleet P]                 删角色（走协议）+ 删账号，幂等
   account create       创建账号（已存在则刷新密码，幂等）
   account list         列出 bot 命名空间下的账号（--json 可选）
   account delete       删除账号（仍拥有角色时会拒绝，需先在游戏里删角色）

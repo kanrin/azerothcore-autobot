@@ -7,6 +7,12 @@ go.work.sum
 # Profiles with real credentials/DSNs; commit only the placeholder template.
 profiles/*.local.yml
 
+# Fleet files with machine-specific paths; the templates are fleet.example.yml and
+# roster/example.yml.
+fleet.yml
+fleet.local.yml
+roster/*.local.yml
+
 # Secrets.
 .env
 .env.local

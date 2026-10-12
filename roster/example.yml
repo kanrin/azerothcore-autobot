@@ -1,0 +1,26 @@
+# Example roster: three bots, two Alliance and one Horde.
+#
+# One file may hold several bots, and every *.yml in roster_dir is read in file
+# name order. What an entry leaves out is filled in:
+#
+#   account    -> the prefix plus the entry's position, two digits (autobot01)
+#   character  -> the prefix plus the label, in AzerothCore's letter rules
+#
+# Everything that can be wrong is refused when the fleet is loaded, so a typo like
+# the human hunter below costs a second rather than a failed character creation.
+
+bots:
+  - name: alpha
+    race: 1   # human, Alliance
+    class: 1  # warrior
+    gender: 0
+
+  - name: bravo
+    race: 4   # night elf, Alliance
+    class: 11 # druid (4/3 would be a hunter, which is correct for night elves)
+    gender: 1
+
+  - name: charlie
+    race: 2   # orc, Horde
+    class: 1  # warrior
+    gender: 0

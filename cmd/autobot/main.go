@@ -49,6 +49,8 @@ func main() {
 		err = runAccount(os.Args[2:], logger)
 	case "run":
 		err = runRun(os.Args[2:], logger)
+	case "fleet":
+		err = runFleet(os.Args[2:], logger)
 	case "", "help", "-h", "--help":
 		usage(os.Stdout)
 		return
